@@ -281,6 +281,7 @@ void Application::DrainServices()
             SetWindowTextW(window_.Handle(), title.c_str());
         }
         view_.SetMedia(std::move(*media));
+        if (!view_.Media().available) stressRemaining_ = 0;
     }
     if (volume)
     {
@@ -374,6 +375,7 @@ void Application::OnWindowEvent(WindowEvent event)
     case WindowEvent::PowerChanged: RefreshBattery(); return;
     case WindowEvent::DesktopChanged: RefreshDesktop(); return;
     case WindowEvent::StressTest:
+        if (!view_.Media().available) break;
         stressRemaining_ = 80;
         stressElapsed_ = 0;
         break;

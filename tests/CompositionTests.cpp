@@ -136,9 +136,9 @@ void TestDynamicContent(CompositionRenderer& renderer, HWND window, IslandView& 
 {
     renderer.Resize({480, 400}, 96);
     view.Configure({}, true);
-    view.ShowPage(IslandPage::Media);
     auto media = FixtureMedia();
     view.SetMedia(media);
+    view.ShowPage(IslandPage::Media);
     Submit(renderer, window, view);
     MONITORINFO monitor{sizeof(MONITORINFO)};
     Expect(GetMonitorInfoW(MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY), &monitor) != FALSE,
@@ -206,8 +206,9 @@ void TestDynamicContent(CompositionRenderer& renderer, HWND window, IslandView& 
         view.SetMedia(media);
         view.ShowPage(IslandPage::Media);
         Submit(renderer, window, view);
-        Expect(renderer.HitTest({210, 110}) && !renderer.HitTest({0, 0}),
-            "Dynamic media updates damaged the submitted panel region");
+        Expect(renderer.HitTest({210, 110}) == media.available && !renderer.HitTest({0, 0}) &&
+            view.Expanded() == media.available,
+            "Dynamic media updates failed to collapse an ended session or restore its player");
         Expect(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= dynamicBaseline,
             "Repeated media content updates leaked GDI resources");
     }
@@ -354,7 +355,7 @@ int main()
                     Expect(!renderer.HitTest({0, 0}) && !renderer.HitTest({static_cast<LONG>(240 * scale), static_cast<LONG>(100 * scale)}),
                         "GPU empty host hit failed");
                     view.Configure({}, true);
-                    view.ShowMain();
+                    view.ShowSettings();
                     Submit(renderer, window, view);
                     Expect(renderer.HitTest({static_cast<LONG>(240 * scale), static_cast<LONG>(110 * scale)}),
                         "GPU expanded hit area failed");

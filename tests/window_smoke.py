@@ -327,9 +327,12 @@ def main():
         pump(1.2)
         assert not clicks, 'Capsule click leaked into probe'
         assert u.GetForegroundWindow() == foreground, 'Capsule click stole foreground focus'
+        assert region_size(app)[1] < 90, 'Clock click opened a removed module home'
+        select_context_item(app, cx, cy, 8)  # Only explicit settings can open a no-player panel.
+        pump(1.2)
         expanded_y = rect.top + round(110 * scale)
         assert u.WindowFromPoint(w.POINT(cx, expanded_y)) == app, 'Expanded hit region did not grow'
-        capture_host(rect, 'artifacts/expanded.png')
+        capture_host(rect, 'artifacts/expanded-settings.png')
         after_expansion = w.RECT()
         assert u.GetWindowRect(app, c.byref(after_expansion))
         assert (after_expansion.left, after_expansion.top, after_expansion.right, after_expansion.bottom) == (
@@ -379,11 +382,9 @@ def main():
         select_tray_item(app, cx, cy, 0)  # Show, while the island is hidden
         assert u.IsWindowVisible(app), 'Tray menu could not restore the hidden island'
         assert u.GetForegroundWindow() == foreground, 'Tray menu did not restore foreground focus'
-        select_tray_item(app, cx, cy, 1)  # Expand
+        send(app, 0x312, 3)  # Panel request is inert without a media session.
         pump(1.2)
-        assert u.WindowFromPoint(w.POINT(cx, empty_y)) == app, 'Tray menu did not expand the island'
-        click_at(close_x, close_y)
-        pump(1.2)
+        assert u.WindowFromPoint(w.POINT(cx, empty_y)) == probe, 'No-player hotkey opened an obsolete module panel'
         select_tray_item(app, cx, cy, 0)  # Hide
         assert not u.IsWindowVisible(app), 'Tray menu did not hide the island'
         select_tray_item(app, cx, cy, 2)  # Settings, while the island is hidden
@@ -430,18 +431,16 @@ def main():
             u.GetWindowRgn(app, region)
             g.GetRgnBox(region, c.byref(box))
             g.DeleteObject(region)
-            raise AssertionError('Rapid reversals did not settle collapsed; region=' +
+            raise AssertionError('Repeated clock clicks opened an obsolete panel; region=' +
                                  str((box.left, box.top, box.right, box.bottom)))
         gdi_after_reversals = u.GetGuiResources(process_handle, 0)
         assert gdi_after_reversals <= gdi_before_reversals + 3, (
-            'GDI objects grew after reversals: baseline=' + str(gdi_baseline) +
+            'GDI objects grew after repeated ignored clock clicks: baseline=' + str(gdi_baseline) +
             ', after_tray=' + str(gdi_after_tray) + ', before_reversals=' + str(gdi_before_reversals) +
             ', after_reversals=' + str(gdi_after_reversals))
         send(app, 0x312, 3)
         pump(1.2)
-        assert u.WindowFromPoint(w.POINT(cx, empty_y)) == app, 'Panel hotkey message did not expand'
-        send(app, 0x312, 3)
-        pump(1.2)
+        assert u.WindowFromPoint(w.POINT(cx, empty_y)) == probe, 'No-player panel hotkey opened a removed module home'
         select_context_item(app, cx, cy, 8)  # Settings
         pump(1.2)
         capture_host(rect, 'artifacts/settings.png')
@@ -472,10 +471,10 @@ def main():
             'capsule input', 'real cross-process clicks through empty host and rounded corner',
             'dark translucent capsule and transparent background pixels', 'hide/show message routing',
             'version-4 tray mouse and keyboard callbacks restore a hidden island',
-            'tray menu show/hide, expand, settings, and foreground restoration',
+            'tray menu show/hide, settings, and foreground restoration',
             'stable GDI resources across 40 repeated tray menus',
             'spring expansion and close button', 'fixed host size during animation',
-            '100 animation reversals', 'settings JSON persistence', 'reduced motion',
+            '100 clock clicks keep removed panels closed', 'settings JSON persistence', 'reduced motion',
             'context menu recenter and exit', 'clean exit']}, ensure_ascii=False))
     finally:
         if process and process.poll() is None:

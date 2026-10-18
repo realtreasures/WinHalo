@@ -57,6 +57,8 @@ void TestAnimation()
     for (size_t i = 0; i < targets.size(); ++i)
         Expect(properties.Get(static_cast<Property>(i)) > 0, "An animated property was not updated");
     IslandView view;
+    MediaSnapshot media; media.available = true;
+    view.SetMedia(media);
     view.RevealCapsule();
     for (int i = 0; i < 600; ++i) view.Step(1.0 / 144);
     for (int i = 0; i < 1000; ++i)
@@ -70,7 +72,7 @@ void TestAnimation()
     }
     view.Collapse();
     for (int i = 0; i < 600; ++i) view.Step(1.0 / 144);
-    Expect(!view.Animating() && view.Frame().width == view.Layout().width, "View did not stop after settling");
+    Expect(!view.Animating() && view.Frame().width == 300, "Media view did not stop after settling");
     view.Configure({}, true);
     view.Toggle();
     Expect(!view.Animating() && view.Frame().width == view.Layout().expandedWidth && view.Frame().opacity == 1,

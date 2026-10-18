@@ -323,9 +323,10 @@ void CompositionRenderer::Draw(const IslandView& view)
         }
     };
     SYSTEMTIME local{}; GetLocalTime(&local);
-    wchar_t clock[16]{}, date[48]{};
+    wchar_t clock[16]{}, date[48]{}, shortDate[16]{};
     swprintf_s(clock, L"%02u:%02u", local.wHour, local.wMinute);
-    swprintf_s(date, L"%u 月 %u 日 · 轻触展开", local.wMonth, local.wDay);
+    swprintf_s(date, L"%u 月 %u 日", local.wMonth, local.wDay);
+    swprintf_s(shortDate, L"%u/%u", local.wMonth, local.wDay);
     if (alpha > 0.001f)
     {
         context_->PushAxisAlignedClip(Rect(bounds), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -357,7 +358,7 @@ void CompositionRenderer::Draw(const IslandView& view)
             context_->DrawLine({bounds.left + 26, centerY}, {bounds.left + 29, centerY + 2}, brush_.Get(), 1.2f);
             text(clock, {bounds.left + 46, centerY - 14, bounds.right - 38, centerY + 15}, 0.96f, titleFormat_.Get());
             if (frame.hover > 0.1f)
-                text(L"轻触展开", {bounds.left + 110, centerY - 8, bounds.right - 12, centerY + 12}, 0.55f);
+                text(shortDate, {bounds.left + 116, centerY - 8, bounds.right - 12, centerY + 12}, 0.55f);
             if (view.Battery().available && frame.hover < 0.1f)
                 DrawBatteryIcon(view, bounds.right - 33, centerY - 5, alpha);
         }

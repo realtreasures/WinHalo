@@ -35,7 +35,7 @@ void TestLineState()
 
     view.SetPointerInside(true, start);
     Expect(!view.Line() && !view.Expanded() && view.IdleDeadline() == never &&
-        view.ActionAt(240, 38) == ViewAction::Toggle,
+        view.ActionAt(240, 38) == ViewAction::None,
         "Pointer entry did not reveal only the capsule");
     Expect(!view.RefreshIdle(start + 60s) && !view.Line(), "Pointer-held capsule timed out");
     view.SetPointerInside(false, start + 60s);
@@ -73,13 +73,48 @@ void TestLineState()
         view.RefreshIdle(start + 305s), "Showing a hidden capsule did not restart its grace period");
 
     view.Toggle();
-    Expect(view.Expanded() && !view.Line() && view.IdleDeadline() == never &&
-        !view.RefreshIdle(start + 400s), "Explicit panel opening from line was lost or timed out");
+    Expect(view.Line() && !view.Expanded() && view.IdleDeadline() == never,
+        "No-player panel hotkey changed the resting line");
     view.ShowSettings();
     Expect(view.Settings() && view.IdleDeadline() == never && !view.RefreshIdle(start + 500s),
         "Settings were automatically collapsed");
     view.Collapse();
     Expect(!view.Line() && !view.Expanded(), "Closing a panel skipped the capsule stage");
+
+    // Every formerly public module route must preserve the idle clock, including
+    // its already-running grace period. This also guards keyboard/tray bypasses.
+    IslandView clock;
+    clock.Configure({}, true);
+    const auto tryOldEntrances = [&]
+    {
+        clock.Toggle(); clock.ShowMain(); clock.ShowPage(IslandPage::Home);
+        clock.ShowPage(IslandPage::Media); clock.ShowPage(IslandPage::Volume);
+        clock.ShowPage(IslandPage::Battery); clock.CycleDebugSize();
+    };
+    tryOldEntrances();
+    Expect(clock.Line() && !clock.Expanded() && !clock.Animating() && clock.IdleDeadline() == never,
+        "A legacy module route bypassed the no-player line policy");
+    clock.RevealCapsule(start + 510s);
+    const auto clockDeadline = clock.IdleDeadline();
+    tryOldEntrances();
+    Expect(!clock.Line() && !clock.Expanded() && clock.ShowsClock() && !clock.Animating() &&
+        clock.ActionAt(240, 38) == ViewAction::None && clock.IdleDeadline() == clockDeadline &&
+        !clock.RefreshIdle(start + 514999ms) && clock.RefreshIdle(start + 515s),
+        "A no-player click/hotkey/navigation restarted the clock capsule deadline");
+    VolumeSnapshot clockVolume; clockVolume.available = true; clockVolume.level = 0.4f;
+    clock.SetVolume(clockVolume, true);
+    tryOldEntrances();
+    Expect(clock.VolumeToast() && !clock.Expanded() && clock.Frame().height == 88 &&
+        clock.IdleDeadline() == never, "A disabled panel entrance dismissed a live volume notification");
+    clock.DismissVolumeToast();
+    clock.ShowSettings();
+    clock.ShowPage(IslandPage::Volume); clock.ShowPage(IslandPage::Battery); clock.CycleDebugSize();
+    Expect(clock.Settings(), "A removed module or debug size replaced the settings page");
+    clock.ShowMain();
+    Expect(!clock.Expanded() && !clock.Line() && clock.ShowsClock(),
+        "Returning from settings without media did not restore the clock capsule");
+    clock.ShowSettings(); clock.Toggle();
+    Expect(!clock.Expanded() && clock.ShowsClock(), "Toggle could not close settings without a media session");
 
     MediaSnapshot media;
     media.available = media.playing = true;

@@ -117,10 +117,12 @@ void IslandView::Retarget()
 
 void IslandView::Toggle()
 {
+    if (expanded_) { Collapse(); return; }
+    if (!media_.available) return;
     volumeToast_ = batteryToast_ = systemSettings_ = false;
-    expanded_ = !expanded_;
+    expanded_ = true;
     line_ = false;
-    page_ = expanded_ && media_.available ? IslandPage::Media : IslandPage::Home;
+    page_ = IslandPage::Media;
     settings_ = false;
     debugSize_ = 0;
     ArmIdle();
@@ -151,12 +153,17 @@ void IslandView::ShowSettings()
 
 void IslandView::ShowMain()
 {
-    ShowPage(media_.available ? IslandPage::Media : IslandPage::Home);
+    if (media_.available) ShowPage(IslandPage::Media);
+    else if (expanded_) Collapse();
 }
 
 void IslandView::ShowPage(IslandPage page)
 {
     if (page == IslandPage::Settings) { ShowSettings(); return; }
+    if (page == IslandPage::Home) { ShowMain(); return; }
+    // Playback and explicit settings are the only expanded surfaces. Legacy
+    // module actions cannot reopen the removed dashboard or its detail pages.
+    if (page != IslandPage::Media || !media_.available) return;
     volumeToast_ = batteryToast_ = systemSettings_ = false;
     expanded_ = true;
     line_ = false;
@@ -169,10 +176,12 @@ void IslandView::ShowPage(IslandPage page)
 
 void IslandView::CycleDebugSize()
 {
+    if (!media_.available) return;
     volumeToast_ = batteryToast_ = systemSettings_ = false;
     expanded_ = true;
     line_ = false;
     settings_ = false;
+    page_ = IslandPage::Media;
     debugSize_ = (debugSize_ + 1) % 3;
     ArmIdle();
     Retarget();
@@ -395,13 +404,15 @@ ViewRect IslandView::VolumeButton(ViewAction action) const noexcept
 ViewAction IslandView::ActionAt(float x, float y) const noexcept
 {
     if (Line()) return ViewAction::RevealCapsule;
-    if (Frame().opacity < 0.65f) return ViewAction::Toggle;
-    if (batteryToast_) return ViewAction::Toggle;
+    if (!expanded_ && !TransientToast() && !media_.available) return ViewAction::None;
+    const auto expandAction = media_.available || expanded_ ? ViewAction::Toggle : ViewAction::None;
+    if (Frame().opacity < 0.65f) return expandAction;
+    if (batteryToast_) return expandAction;
     if (volumeToast_)
     {
         for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
             if (VolumeButton(action).Contains(x, y)) return volume_.available ? action : ViewAction::None;
-        return ViewAction::Toggle;
+        return expandAction;
     }
     if (Frame().height < 190) return ViewAction::Toggle;
     if (page_ != IslandPage::Media && CloseButton().Contains(x, y)) return ViewAction::Collapse;

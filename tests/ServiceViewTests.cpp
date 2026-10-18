@@ -29,7 +29,7 @@ void TestServiceView()
 {
     IslandView mediaView;
     mediaView.Configure({}, true);
-    mediaView.ShowPage(IslandPage::Media);
+    mediaView.RevealCapsule();
     MediaSnapshot media;
     media.canPrevious = media.canToggle = media.canNext = true;
     mediaView.SetMedia(media);
@@ -38,6 +38,7 @@ void TestServiceView()
             "No media session left an enabled control or toggled the panel");
     media.available = true;
     mediaView.SetMedia(media);
+    mediaView.ShowPage(IslandPage::Media);
     Expect(mediaView.ActionAt(80, 76) == ViewAction::OpenMediaApp &&
         Hit(mediaView, mediaView.CloseButton()) == ViewAction::OpenMediaApp,
         "Card body or removed close arrow did not route to opening the player");
@@ -156,11 +157,11 @@ void TestServiceView()
     volumeView.DismissVolumeToast();
     Expect(!volumeView.Animating(), "Dismissing an absent volume toast restarted animation");
 
-    volumeView.ShowPage(IslandPage::Volume);
+    volumeView.SetVolume(volume, true);
     Settle(volumeView);
     for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
         Expect(Hit(volumeView, volumeView.VolumeButton(action)) == action,
-            "Expanded volume control did not resolve its action");
+            "Restored volume toast control did not resolve its action");
     volume.available = false;
     volumeView.SetVolume(volume, true);
     for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
@@ -192,7 +193,7 @@ void TestServiceView()
 
     IslandView reducedView;
     reducedView.Configure({}, true);
-    reducedView.ShowPage(IslandPage::Volume);
+    reducedView.ShowSettings();
     volume.available = true;
     volume.level = 0.2f;
     reducedView.SetVolume(volume, false);
@@ -212,19 +213,7 @@ void TestServiceView()
     IslandView navigation;
     navigation.Configure({}, true);
     navigation.ShowMain();
-    Expect(navigation.Page() == IslandPage::Home && navigation.Expanded(), "Expand did not open the module home");
-    for (const auto module : {IslandPage::Media, IslandPage::Volume, IslandPage::Battery, IslandPage::Settings})
-    {
-        const auto expected = module == IslandPage::Media ? ViewAction::OpenMedia : (module == IslandPage::Volume ? ViewAction::OpenVolume :
-            (module == IslandPage::Battery ? ViewAction::OpenBattery : ViewAction::Settings));
-        Expect(Hit(navigation, navigation.ModuleButton(module)) == expected, "Module card routed to the wrong page");
-    }
-    navigation.ShowPage(IslandPage::Media);
-    Expect(Hit(navigation, navigation.BackButton()) == ViewAction::None &&
-        Hit(navigation, navigation.SettingsButton()) == ViewAction::None,
-        "Focused player retained invisible home or settings hit targets");
-    navigation.ShowPage(IslandPage::Volume);
-    Expect(Hit(navigation, navigation.BackButton()) == ViewAction::Home, "Volume detail has no return-to-home action");
+    Expect(navigation.Line() && !navigation.Expanded(), "No-player navigation opened a removed module home");
     navigation.SetGlassOptions(false, true, false);
     navigation.ShowSystemSettings();
     Expect(Hit(navigation, navigation.GlassButton()) == ViewAction::NativeGlass, "Native glass setting is not reachable");
@@ -240,6 +229,9 @@ void TestServiceView()
     navigation.Toggle();
     Expect(navigation.Page() == IslandPage::Media && navigation.Frame().width == 420 && navigation.Frame().height == 200,
         "Opening an active media capsule did not directly show the compact player");
+    Expect(Hit(navigation, navigation.BackButton()) == ViewAction::None &&
+        Hit(navigation, navigation.SettingsButton()) == ViewAction::None,
+        "Focused player retained invisible home or settings hit targets");
     navigation.ShowSettings(); navigation.ShowMain();
     Expect(navigation.Page() == IslandPage::Media, "Returning from settings did not restore the current player");
     compact.playing = false; navigation.SetMedia(compact);
@@ -249,8 +241,8 @@ void TestServiceView()
     navigation.Configure({}, false);
     Expect(navigation.ContinuousFrames() && navigation.EqualizerLevel(0) >= 0.22 && navigation.EqualizerLevel(0) <= 1,
         "Visible playing capsule cannot animate its equalizer");
-    navigation.ShowPage(IslandPage::Home); Settle(navigation);
-    Expect(!navigation.ContinuousFrames(), "Module home continuously renders during playback");
+    navigation.ShowSettings(); Settle(navigation);
+    Expect(!navigation.ContinuousFrames(), "Settings continuously render during playback");
     navigation.ShowPage(IslandPage::Media);
     Expect(navigation.ContinuousFrames(), "Playing detail has no smooth progress frames");
     compact.playing = false; navigation.SetMedia(compact); Settle(navigation);
@@ -260,8 +252,8 @@ void TestServiceView()
     Expect(navigation.ShowsClock() && navigation.Frame().width == navigation.Layout().width,
         "Ending the media session did not restore the clock capsule");
     navigation.Toggle(); Settle(navigation);
-    Expect(navigation.Page() == IslandPage::Home && navigation.Frame().height == navigation.Layout().expandedHeight,
-        "Opening the clock lost the module home when no media session exists");
+    Expect(!navigation.Expanded() && navigation.ShowsClock() && navigation.Frame().height == navigation.Layout().height,
+        "Clicking the clock resurrected the removed module home");
     navigation.SetMedia(compact); navigation.ShowMain(); Settle(navigation);
     navigation.SetMedia({}); Settle(navigation);
     Expect(!navigation.Expanded() && navigation.ShowsClock(), "Last player exit left an expanded empty player");

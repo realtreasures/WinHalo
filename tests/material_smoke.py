@@ -1,4 +1,4 @@
-"""Native page navigation, shadow pass-through and bounded optional underlay.
+"""Explicit settings navigation, shadow pass-through and bounded optional underlay.
 
 Uses isolated settings and a window owned by this script. No media/audio commands.
 """
@@ -54,18 +54,14 @@ def main():
         assert u.WindowFromPoint(point(240, 67)) == probe, 'Shadow stole pointer hit outside capsule'
         desktop.click_at(point(240, 67).x, point(240, 67).y)
         assert desktop.clicks, 'Shadow swallowed a cross-process click'
-        desktop.send(app, 0x312, 3)
+        desktop.reveal_capsule(app)
+        click(240, 38)
+        desktop.send(app, 0x312, 3); desktop.pump(0.3)
+        assert desktop.region_size(app)[1] < 90, 'Clock click/hotkey opened a removed module panel'
+        at = point(240, 38)
+        desktop.select_tray_item(app, at.x, at.y, 2)
         desktop.pump(0.3)
-        desktop.capture_host(rect, 'artifacts/material-home.png')
-        # Music, volume and battery cards open real detail pages. No controls clicked.
-        for x, y, name in [(130, 145, 'media'), (340, 145, 'volume'), (130, 240, 'battery')]:
-            click(x, y)
-            desktop.capture_host(rect, 'artifacts/material-' + name + '.png')
-            if name == 'media':
-                desktop.send(app, 0x312, 3)  # Focused player has no close arrow or home/settings footer.
-                desktop.send(app, 0x312, 3); desktop.pump(0.3)
-            else: click(90, 328)
-        click(340, 240)  # Settings card.
+        desktop.capture_host(rect, 'artifacts/material-settings.png')
         click(90, 328)   # System page.
         def pixel(x, y):
             dc = u.GetDC(None)
@@ -99,7 +95,7 @@ def main():
         baseline = u.GetGuiResources(handle, 0)
         for _ in range(20):
             click(415, 51)
-            desktop.send(app, 0x312, 3)
+            desktop.select_tray_item(app, at.x, at.y, 2)
         assert u.GetGuiResources(handle, 0) <= baseline + 2, 'Material windows leaked GDI objects'
         click(415, 51)
         desktop.send(app, 0x312, 1)
@@ -112,7 +108,7 @@ def main():
         assert not desktop.owned_window(process.pid, 'STATIC', 'WinHalo material shadow') and not desktop.owned_window(process.pid, 'WinHalo.MaterialGlassWindow'), 'Backdrop windows survived exit'
         print(json.dumps({'result': 'PASS', 'native_backdrop_api_available': native,
             'live_background_change_observed': live_background,
-            'checks': ['module cards and return to home', 'shadow cross-process input transparency',
+            'checks': ['clock cannot open removed modules', 'explicit settings and system page', 'shadow cross-process input transparency',
                 'bounded native underlay', '20 material layout cycles', 'hide/show and teardown', 'no focus theft']}))
     finally:
         if process and process.poll() is None:

@@ -81,7 +81,7 @@ int main()
             "1000 reversals, reduced motion; media control capabilities and timeline extrapolation; "
             "volume sanitization, toast lifecycle, controls and settings preservation; "
             "battery decoding/hysteresis, system settings, visibility policy and isolated startup registry; "
-            "module navigation, compact media takeover and conditional equalizer/progress frames; "
+            "media-only navigation, compact media takeover and conditional equalizer/progress frames; "
             "line reveal, exact five-second idle deadline, re-entry, pause, notifications and hidden restoration; "
             "100/125/150/200% surface geometry, alpha hit testing, hover deduplication, "
             "48 DPI resizes, GDI release and invalid layout rejection\n";

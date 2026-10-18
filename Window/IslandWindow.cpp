@@ -306,6 +306,7 @@ void IslandWindow::ApplyVisibility()
 
 void IslandWindow::ShowFromTray(bool expand)
 {
+    if (expand && !view_.Media().available) return;
     EnsureVisible();
     if (expand && !view_.Expanded() && handler_) handler_(WindowEvent::TogglePanel);
 }
@@ -332,13 +333,14 @@ void IslandWindow::ShowContextMenu(POINT point)
     add(MF_STRING, About, L"关于 WinHalo");
     add(MF_STRING, Exit, L"退出\tCtrl+Alt+Q");
     add(MF_SEPARATOR, 0, nullptr);
-    add(MF_STRING, TogglePanel, view_.Expanded() ? L"收起" : L"展开");
+    add(MF_STRING | ((view_.Expanded() || view_.Media().available) ? 0 : MF_GRAYED),
+        TogglePanel, view_.Expanded() ? L"收起" : L"展开播放器");
     add(MF_STRING, Settings, L"设置");
 #ifdef _DEBUG
     add(MF_SEPARATOR, 0, nullptr);
     add(MF_STRING, Performance, L"性能数据");
-    add(MF_STRING, StressTest, L"连续展开 / 收起测试");
-    add(MF_STRING, DebugSize, L"切换测试尺寸");
+    add(MF_STRING | (view_.Media().available ? 0 : MF_GRAYED), StressTest, L"连续展开 / 收起测试");
+    add(MF_STRING | (view_.Media().available ? 0 : MF_GRAYED), DebugSize, L"切换测试尺寸");
     add(MF_STRING, RecreateDevice, L"重建图形设备");
 #endif
     // 菜单自身接受输入；窗口仍保留 NOACTIVATE，不主动抢占其他应用焦点。
@@ -353,10 +355,12 @@ void IslandWindow::ShowContextMenu(POINT point)
     EndMenu();
     switch (command)
     {
-    case TogglePanel: if (handler_) handler_(WindowEvent::TogglePanel); break;
+    case TogglePanel:
+        if ((view_.Expanded() || view_.Media().available) && handler_) handler_(WindowEvent::TogglePanel);
+        break;
     case Settings: if (handler_) handler_(WindowEvent::Settings); break;
-    case StressTest: if (handler_) handler_(WindowEvent::StressTest); break;
-    case DebugSize: if (handler_) handler_(WindowEvent::DebugSize); break;
+    case StressTest: if (view_.Media().available && handler_) handler_(WindowEvent::StressTest); break;
+    case DebugSize: if (view_.Media().available && handler_) handler_(WindowEvent::DebugSize); break;
     case RecreateDevice: if (handler_) handler_(WindowEvent::RecreateDevice); break;
     case Performance:
         if (diagnostics_) MessageBoxW(window_, diagnostics_().c_str(), L"WinHalo 性能数据", MB_OK);
@@ -382,7 +386,8 @@ void IslandWindow::ShowContextMenu(POINT point)
     case Hide: if (visibilityHotkey_ || tray_.Registered()) ToggleVisible(); break;
     case About:
         MessageBoxW(window_, L"WinHalo\n原生 Windows 灵动岛\n\n"
-            L"触碰顶部横线唤出胶囊，单击胶囊展开。\n"
+            L"触碰顶部横线唤出胶囊。\n"
+            L"无媒体时显示时间；有媒体时单击胶囊展开播放器。\n"
             L"移开鼠标 5 秒后胶囊收回横线。\n"
             L"在设置中调整动画速度或减少动态效果。",
             L"关于 WinHalo", MB_OK | MB_ICONINFORMATION);
@@ -397,7 +402,8 @@ void IslandWindow::ShowTrayMenu(POINT point)
     Menu menu(CreatePopupMenu());
     if (!menu) ThrowLastError("CreatePopupMenu (tray)");
     CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayToggle, Visible() ? L"隐藏灵动岛" : L"显示灵动岛"), "AppendMenuW");
-    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayExpand, L"展开灵动岛"), "AppendMenuW");
+    CheckWin32(AppendMenuW(menu.get(), MF_STRING | (view_.Media().available ? 0 : MF_GRAYED),
+        TrayExpand, L"展开播放器"), "AppendMenuW");
     CheckWin32(AppendMenuW(menu.get(), MF_STRING, TraySettings, L"设置"), "AppendMenuW");
     CheckWin32(AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr), "AppendMenuW");
     CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayExit, L"退出"), "AppendMenuW");

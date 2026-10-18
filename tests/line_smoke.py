@@ -1,4 +1,4 @@
-"""Real pointer transitions for the line/capsule/panel hierarchy.
+"""Real pointer transitions for the line/clock and explicit settings hierarchy.
 
 Uses an isolated, services-disabled app and a nonactivating window below it.
 No input or commands are sent to a user's music player or other WinHalo.
@@ -130,7 +130,13 @@ def main():
             str(desktop.clicks) + ', hit=' + str(u.WindowFromPoint(point(240, 38))) +
             ', probe=' + str(probe) + ', app=' + str(app) + ', region=' + str(desktop.region_size(app)))
 
-        desktop.reveal_capsule(app); click(240, 38); wait(panel, 'Capsule click did not open the full panel')
+        desktop.reveal_capsule(app); click(240, 38)
+        assert compact(), 'Clock click opened a removed module home'
+        desktop.send(app, 0x312, 3); desktop.pump(0.3)
+        assert compact(), 'Panel hotkey bypassed the no-player compact policy'
+        at = point(240, 38)
+        desktop.select_tray_item(app, at.x, at.y, 2)  # Settings remains explicitly reachable.
+        wait(panel, 'Tray Settings did not open its full panel')
         move(5, 100); desktop.pump(5.5)
         assert panel(), 'Full panel incorrectly used the compact idle timeout'
         click(415, 51); wait(compact, 'Panel close skipped the compact stage')
@@ -172,10 +178,13 @@ def main():
         wait(compact, 'Hidden time consumed the capsule grace period')
         desktop.pump(3.7); assert compact(), 'Restored capsule collapsed too soon'
         wait(line, 'Restored capsule never returned to line', 2.5)
-        # Explicit hotkey must still open the full panel from the line.
-        desktop.send(app, 0x312, 3); wait(panel, 'Panel hotkey stopped working in line state')
-        desktop.send(app, 0x312, 3); wait(compact, 'Panel hotkey skipped the compact state')
-        desktop.pump(5.7); wait(line, 'Hotkey-closed capsule did not return to line')
+        # No-player panel requests cannot reveal a line or extend a clock's deadline.
+        desktop.send(app, 0x312, 3); desktop.pump(0.3)
+        assert line(), 'No-player hotkey revealed or expanded the idle line'
+        desktop.reveal_capsule(app); move(5, 100); hold(3.7, 5, 100)
+        desktop.send(app, 0x312, 3)
+        assert compact(), 'No-player hotkey changed the clock compact state'
+        wait(line, 'No-player hotkey restarted the existing five-second deadline', 2.5)
         after = w.RECT(); assert u.GetWindowRect(app, c.byref(after))
         assert tuple(getattr(after, name) for name in ('left', 'top', 'right', 'bottom')) == tuple(
             getattr(rect, name) for name in ('left', 'top', 'right', 'bottom')), 'State transitions resized the native host'
@@ -184,7 +193,8 @@ def main():
         print(json.dumps({'result': 'PASS', 'dpi': u.GetDpiForWindow(probe), 'cpu_ms_per_1_2_seconds': samples,
             'checks': ['startup line', 'real hover reveals compact only', 'held pointer prevents collapse',
                 'five-second leave deadline and re-entry reset', 'cross-process click-through',
-                'panel and menu timeout exclusion', 'hide/show timer restoration', 'hotkey from line',
+                'settings and menu timeout exclusion', 'hide/show timer restoration',
+                'clock click and hotkey cannot open removed panels or reset grace period',
                 'fixed host size', 'static CPU', 'no focus theft']}))
     finally:
         if process and process.poll() is None:
