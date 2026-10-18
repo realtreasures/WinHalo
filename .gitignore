@@ -1,0 +1,10 @@
+.vs/
+x64/
+Win32/
+Debug/
+Release/
+*.vcxproj.user
+*.VC.db
+*.VC.opendb
+artifacts/
+__pycache__/
