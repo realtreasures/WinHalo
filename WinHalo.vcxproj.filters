@@ -25,6 +25,13 @@
     <ClInclude Include="framework.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Window\SettingsWindow.h"><Filter>Window</Filter></ClInclude>
+    <ClInclude Include="Window\SettingsPainter.h"><Filter>Window</Filter></ClInclude>
+    <ClInclude Include="Services\BehaviorService.h"><Filter>Services</Filter></ClInclude>
+    <ClInclude Include="Utils\Localization.h"><Filter>Utils</Filter></ClInclude>
+    <ClCompile Include="Window\SettingsWindow.cpp"><Filter>Window</Filter></ClCompile>
+    <ClCompile Include="Window\SettingsPainter.cpp"><Filter>Window</Filter></ClCompile>
+    <ClCompile Include="Services\BehaviorService.cpp"><Filter>Services</Filter></ClCompile>
     <ClInclude Include="Graphics\MaterialTheme.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Window\MaterialBackdrop.h"><Filter>Window</Filter></ClInclude>
     <ClInclude Include="targetver.h">

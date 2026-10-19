@@ -31,10 +31,13 @@
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>_WIN32_WINNT=0x0A00;WINVER=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>User32.lib;Gdi32.lib;Advapi32.lib;Dwmapi.lib;Uuid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>User32.lib;Gdi32.lib;Advapi32.lib;Dwmapi.lib;Uuid.lib;Shell32.lib;WindowsApp.lib;RuntimeObject.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="GeometryTests.cpp" />
+    <ClCompile Include="SettingsTests.cpp" />
+    <ClCompile Include="..\Core\Configuration.cpp" />
+    <ClCompile Include="..\Utils\Logger.cpp" />
     <ClCompile Include="AnimationTests.cpp" />
     <ClCompile Include="LineStateTests.cpp" />
     <ClCompile Include="ServiceViewTests.cpp" />

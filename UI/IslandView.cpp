@@ -15,9 +15,9 @@ IslandView::IslandView(IslandLayout layout) : layout_(layout)
         layout.hostHeight < layout.height + layout.insetTop + 2 || layout.radius < 0 ||
         layout.insetTop < 2 || layout.topGap < 0 || layout.hostWidth > 2048 || layout.hostHeight > 2048 ||
         layout.expandedWidth < 300 || layout.expandedWidth > layout.hostWidth - 16 ||
-        layout.expandedHeight < 340 || layout.expandedHeight > layout.hostHeight - layout.insetTop - 16)
+        layout.expandedHeight < 200 || layout.expandedHeight * layout.expandedScale > layout.hostHeight - layout.insetTop - 16)
         throw std::invalid_argument("Invalid island layout");
-    animation_.Reset({LineWidth, LineHeight, layout.hostWidth / 2, layout.insetTop,
+    animation_.Reset({layout.lineWidth, LineHeight, layout.hostWidth / 2, layout.insetTop,
         LineHeight / 2, 0, 18, 12, 0.94, 0, 0});
     animation_.Configure(parameters_);
 }
@@ -32,7 +32,7 @@ bool IslandView::SetState(IslandState state) noexcept
 
 void IslandView::ArmIdle(Clock::time_point now) noexcept
 {
-    idleDeadline_ = !line_ && !expanded_ && !TransientToast() && !pointerInside_ && !idlePaused_ && hostVisible_ ?
+    idleDeadline_ = autoHideIdle_ && !line_ && !expanded_ && !TransientToast() && !pointerInside_ && !idlePaused_ && hostVisible_ ?
         now + CapsuleIdleTime : Clock::time_point::max();
 }
 
@@ -47,8 +47,8 @@ bool IslandView::RevealCapsule(Clock::time_point now)
 
 void IslandView::ShowLine()
 {
-    expanded_ = settings_ = volumeToast_ = batteryToast_ = systemSettings_ = false;
-    line_ = true;
+    expanded_ = settings_ = volumeToast_ = batteryToast_ = systemSettings_ = notice_ = false;
+    line_ = autoHideIdle_;
     pointerInside_ = false;
     state_ = IslandState::Idle;
     page_ = IslandPage::Home;
@@ -100,16 +100,22 @@ void IslandView::Retarget()
 {
     float width = expanded_ ? layout_.expandedWidth : layout_.width;
     float height = expanded_ ? layout_.expandedHeight : layout_.height;
-    if (expanded_ && page_ == IslandPage::Media) height = 200;
-    if (!expanded_ && media_.available) { width = std::min(300.0f, layout_.expandedWidth); height = std::max(48.0f, height); }
+    // Retained for older diagnostic fixtures; settings are opened in their own window by Application.
+    if (expanded_ && settings_) height = std::min(340.0f, layout_.hostHeight - layout_.insetTop - 16);
+    if (!expanded_ && media_.available) { width = std::max(300.0f, layout_.width); height = std::max(48.0f, height); }
     if (expanded_ && debugSize_ == 1) { width = 340; height = 160; }
     if (expanded_ && debugSize_ == 2) { width = 260; height = 65; }
     if (TransientToast()) { width = std::min(300.0f, layout_.expandedWidth); height = 88; }
-    if (Line()) { width = LineWidth; height = LineHeight; }
+    if (Line()) { width = layout_.lineWidth; height = LineHeight; }
     const bool content = expanded_ || TransientToast();
     if (!content && !Line() && state_ == IslandState::Hover) { width += 8; height += media_.available ? 16 : 12; }
+    if (!Line())
+    {
+        const float scale = expanded_ ? layout_.expandedScale : (TransientToast() ? 1.0f : layout_.compactScale);
+        width *= scale; height *= scale;
+    }
     animation_.Retarget({width, height, layout_.hostWidth / 2, layout_.insetTop,
-        Line() ? LineHeight / 2 : (content ? 28.0 : layout_.radius), content ? 1.0 : 0.0,
+        Line() ? LineHeight / 2 : std::min(height / 2, content ? 28.0f * (expanded_ ? layout_.expandedScale : 1.0f) : layout_.radius * layout_.compactScale), content ? 1.0 : 0.0,
         content ? 0.0 : 18.0, content ? 0.0 : 12.0, content ? 1.0 : 0.94,
         !Line() && state_ == IslandState::Hover ? 1.0 : 0.0,
         !Line() && !content ? 1.0 : 0.0}, reducedMotion_);
@@ -119,7 +125,7 @@ void IslandView::Toggle()
 {
     if (expanded_) { Collapse(); return; }
     if (!media_.available) return;
-    volumeToast_ = batteryToast_ = systemSettings_ = false;
+    volumeToast_ = batteryToast_ = systemSettings_ = notice_ = false;
     expanded_ = true;
     line_ = false;
     page_ = IslandPage::Media;
@@ -131,7 +137,7 @@ void IslandView::Toggle()
 
 void IslandView::Collapse()
 {
-    volumeToast_ = batteryToast_ = systemSettings_ = false;
+    volumeToast_ = batteryToast_ = systemSettings_ = notice_ = false;
     expanded_ = settings_ = false;
     line_ = false;
     page_ = IslandPage::Home;
@@ -199,6 +205,33 @@ void IslandView::Configure(SpringParameters parameters, bool reducedMotion)
     Retarget();
 }
 
+void IslandView::ApplyLayout(IslandLayout layout, bool autoHideIdle)
+{
+    IslandView validate(layout);
+    layout_ = layout;
+    autoHideIdle_ = autoHideIdle;
+    if (!autoHideIdle_) line_ = false;
+    ArmIdle();
+    Retarget();
+}
+
+void IslandView::ShowNotice(std::wstring title, std::wstring detail, bool link)
+{
+    if (expanded_) return;
+    volumeToast_ = batteryToast_ = false;
+    notice_ = true; linkNotice_ = link;
+    ++noticeRevision_;
+    noticeTitle_ = std::move(title); noticeDetail_ = std::move(detail);
+    ArmIdle(); Retarget();
+}
+
+ViewRect IslandView::NoticeButton(bool open) const noexcept
+{
+    const auto b = Bounds();
+    const float x = b.right - (open ? 138.0f : 72.0f);
+    return {x, b.top + 52, x + 58, b.top + 78};
+}
+
 bool IslandView::Step(double seconds)
 {
     const bool changed = animation_.Step(seconds);
@@ -238,7 +271,7 @@ void IslandView::SetVolume(VolumeSnapshot snapshot, bool showNotification)
     snapshot.level = std::isfinite(snapshot.level) ? std::clamp(snapshot.level, 0.0f, 1.0f) : 0.0f;
     volume_ = std::move(snapshot);
     if (!volume_.available) volumeToast_ = false;
-    else if (showNotification && !expanded_ && !batteryToast_) volumeToast_ = true;
+    else if (showNotification && !expanded_ && !batteryToast_ && !notice_) volumeToast_ = true;
     if (!hadEndpoint || reducedMotion_ || settings_ || (!expanded_ && !volumeToast_)) volumeLevel_.Reset(volume_.level);
     else volumeLevel_.SetTarget(volume_.level);
     if (hadToast != TransientToast()) ArmIdle();
@@ -275,7 +308,7 @@ void IslandView::SetBattery(BatterySnapshot snapshot, bool showNotification)
     snapshot.low = snapshot.available && snapshot.onBattery && !snapshot.charging && snapshot.percent >= 0 && snapshot.percent <= 20;
     battery_ = snapshot;
     if (!snapshot.low) batteryToast_ = false;
-    else if (showNotification && !expanded_)
+    else if (showNotification && !expanded_ && !notice_)
     {
         batteryToast_ = true;
         volumeToast_ = false;
@@ -287,7 +320,7 @@ void IslandView::SetBattery(BatterySnapshot snapshot, bool showNotification)
 void IslandView::DismissTransientToast()
 {
     if (!TransientToast()) return;
-    volumeToast_ = batteryToast_ = false;
+    volumeToast_ = batteryToast_ = notice_ = false;
     ArmIdle();
     Retarget();
 }
@@ -375,15 +408,21 @@ ViewRect IslandView::ModuleButton(IslandPage page) const noexcept
 
 ViewRect IslandView::MediaButton(ViewAction action) const noexcept
 {
-    const auto frame = Frame();
+    const auto b = Bounds();
+    const float scale = std::min((b.right - b.left) / 420.0f, (b.bottom - b.top) / 200.0f);
+    const float top = (b.top + b.bottom - 200 * scale) / 2;
+    const float cx = (b.left + b.right) / 2;
     const float offset = action == ViewAction::MediaPrevious ? -86.0f : (action == ViewAction::MediaNext ? 86.0f : 0.0f);
-    return {frame.centerX + offset - 26, frame.top + 136, frame.centerX + offset + 26, frame.top + 184};
+    return {cx + (offset - 26) * scale, top + 136 * scale, cx + (offset + 26) * scale, top + 184 * scale};
 }
 
 ViewRect IslandView::MediaSourceButton() const noexcept
 {
     const auto bounds = Bounds();
-    return {bounds.left + 14, bounds.top + 138, bounds.left + 58, bounds.top + 182};
+    const float scale = std::min((bounds.right - bounds.left) / 420.0f, (bounds.bottom - bounds.top) / 200.0f);
+    const float left = (bounds.left + bounds.right - 420 * scale) / 2;
+    const float top = (bounds.top + bounds.bottom - 200 * scale) / 2;
+    return {left + 14 * scale, top + 138 * scale, left + 58 * scale, top + 182 * scale};
 }
 
 ViewRect IslandView::VolumeButton(ViewAction action) const noexcept
@@ -404,6 +443,13 @@ ViewRect IslandView::VolumeButton(ViewAction action) const noexcept
 ViewAction IslandView::ActionAt(float x, float y) const noexcept
 {
     if (Line()) return ViewAction::RevealCapsule;
+    if (notice_)
+    {
+        if (Frame().opacity < .9f || Frame().height < 80) return ViewAction::None;
+        if (linkNotice_ && NoticeButton(true).Contains(x, y)) return ViewAction::OpenLink;
+        if (NoticeButton(false).Contains(x, y)) return ViewAction::DismissNotice;
+        return ViewAction::None;
+    }
     if (!expanded_ && !TransientToast() && !media_.available) return ViewAction::None;
     const auto expandAction = media_.available || expanded_ ? ViewAction::Toggle : ViewAction::None;
     if (Frame().opacity < 0.65f) return expandAction;
@@ -411,10 +457,10 @@ ViewAction IslandView::ActionAt(float x, float y) const noexcept
     if (volumeToast_)
     {
         for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
-            if (VolumeButton(action).Contains(x, y)) return volume_.available ? action : ViewAction::None;
+            if (VolumeButton(action).Contains(x, y)) return volume_.available && controlsEnabled_ ? action : ViewAction::None;
         return expandAction;
     }
-    if (Frame().height < 190) return ViewAction::Toggle;
+    if (!expanded_) return expandAction;
     if (page_ != IslandPage::Media && CloseButton().Contains(x, y)) return ViewAction::Collapse;
     if (settings_)
     {

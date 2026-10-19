@@ -148,6 +148,11 @@ void TestServiceView()
     for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
         Expect(Hit(volumeView, volumeView.VolumeButton(action)) == action,
             "Volume toast control did not resolve its action");
+    volumeView.SetControlsEnabled(false);
+    for (const auto action : {ViewAction::VolumeMute, ViewAction::VolumeDown, ViewAction::VolumeUp})
+        Expect(Hit(volumeView, volumeView.VolumeButton(action)) == ViewAction::None,
+            "Disabled system controls still accepted volume input");
+    volumeView.SetControlsEnabled(true);
     volumeView.DismissVolumeToast();
     Settle(volumeView);
     Expect(!volumeView.VolumeToast() && !volumeView.Expanded() &&
@@ -229,8 +234,8 @@ void TestServiceView()
     navigation.Toggle();
     Expect(navigation.Page() == IslandPage::Media && navigation.Frame().width == 420 && navigation.Frame().height == 200,
         "Opening an active media capsule did not directly show the compact player");
-    Expect(Hit(navigation, navigation.BackButton()) == ViewAction::None &&
-        Hit(navigation, navigation.SettingsButton()) == ViewAction::None,
+    Expect(Hit(navigation, navigation.BackButton()) == ViewAction::OpenMediaApp &&
+        Hit(navigation, navigation.SettingsButton()) == ViewAction::OpenMediaApp,
         "Focused player retained invisible home or settings hit targets");
     navigation.ShowSettings(); navigation.ShowMain();
     Expect(navigation.Page() == IslandPage::Media, "Returning from settings did not restore the current player");

@@ -12,7 +12,18 @@ struct Configuration
     bool reducedMotion = false;
     bool autoHideFullscreen = true;
     bool nativeGlass = false;
+    bool autoHideIdle = true;
+    bool rightDrag = true;
+    bool showNotifications = true;
+    bool systemControls = true;
+    bool clipboardLinks = false;
+    bool privacyIndicators = false;
+    std::wstring monitorDevice;
+    std::wstring language = L"system";
 };
+
+// Shared numeric limits and migration are applied before live updates and saves.
+void NormalizeConfiguration(Configuration& configuration) noexcept;
 
 class ConfigurationStore
 {

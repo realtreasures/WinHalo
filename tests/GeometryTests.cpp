@@ -9,6 +9,7 @@ void TestAnimation();
 void TestServiceView();
 void TestSystemBehavior();
 void TestLineState();
+void TestSettings();
 
 void Require(bool condition, const char* message)
 {
@@ -24,6 +25,7 @@ int main()
         TestServiceView();
         TestSystemBehavior();
         TestLineState();
+        TestSettings();
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         window = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             L"STATIC", L"WinHalo surface test", WS_POPUP, 0, 0, 480, 400, nullptr, nullptr,

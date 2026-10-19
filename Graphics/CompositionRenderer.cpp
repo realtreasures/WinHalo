@@ -1,6 +1,7 @@
 #include "CompositionRenderer.h"
 #include "MaterialTheme.h"
 #include "../Utils/Win32Error.h"
+#include "../Utils/Localization.h"
 #include <d2d1_1helper.h>
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,8 @@ void CompositionRenderer::ResetDevice()
     smallCoverClip_.Reset(); largeCoverClip_.Reset();
     artworkRevision_ = 0;
     mediaTextWidth_ = 0;
+    compactTextWidth_ = 0;
+    fontSize_ = -1;
     titleFormat_.Reset(); bodyFormat_.Reset(); smallFormat_.Reset();
     mediaTitleFormat_.Reset(); mediaArtistFormat_.Reset(); writeFactory_.Reset();
     // 先解除 visual 对旧交换链的引用，再释放设备。所有操作限于 UI 线程。
@@ -106,26 +109,36 @@ void CompositionRenderer::CreateDevice(HWND window)
     context_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
         reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf())), "DWriteCreateFactory");
-    const auto format = [&](float size, DWRITE_FONT_WEIGHT weight, Ptr<IDWriteTextFormat>& destination)
-    {
-        Check(writeFactory_->CreateTextFormat(L"Segoe UI", nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, size, L"zh-CN", &destination), "CreateTextFormat");
-    };
-    format(20, DWRITE_FONT_WEIGHT_SEMI_BOLD, titleFormat_);
-    format(13, DWRITE_FONT_WEIGHT_NORMAL, bodyFormat_);
-    format(11, DWRITE_FONT_WEIGHT_NORMAL, smallFormat_);
-    format(22, DWRITE_FONT_WEIGHT_BOLD, mediaTitleFormat_);
-    format(16, DWRITE_FONT_WEIGHT_NORMAL, mediaArtistFormat_);
+    ConfigureFonts(0);
     Check(DCompositionCreateDevice(dxgiDevice.Get(), IID_PPV_ARGS(&composition_)), "DCompositionCreateDevice");
     Check(composition_->CreateTargetForHwnd(window, TRUE, &target_), "Create composition target");
     Check(composition_->CreateVisual(&visual_), "Create visual");
     Check(visual_->SetContent(swapChain_.Get()), "Set composition content");
     Check(target_->SetRoot(visual_.Get()), "Set composition root");
     CreateTargetBitmap();
-    // 首帧完成后才将 visual 提交给 DWM，避免设备重建时暴露空交换链。
     compositionPending_ = true;
     ++deviceGeneration_;
     logger_.Write(hardware_ ? "Renderer: D3D11 hardware + Direct2D + DirectComposition" : "Renderer: WARP fallback + DirectComposition");
+}
+
+void CompositionRenderer::ConfigureFonts(float requested)
+{
+    if (fontSize_ == requested) return;
+    fontSize_ = requested;
+    for (auto& entry : textCache_) entry = {};
+    for (auto& label : mediaLabels_) label.Reset();
+    const float factor = requested > 0 ? requested / 13.0f : 1.0f;
+    const auto format = [&](float size, DWRITE_FONT_WEIGHT weight, Ptr<IDWriteTextFormat>& destination)
+    {
+        destination.Reset();
+        Check(writeFactory_->CreateTextFormat(L"Segoe UI", nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, std::min(size * factor, size >= 20 ? 28.0f : (size >= 13 ? 24.0f : 16.0f)), L"zh-CN", &destination), "CreateTextFormat");
+    };
+    format(20, DWRITE_FONT_WEIGHT_SEMI_BOLD, titleFormat_);
+    format(13, DWRITE_FONT_WEIGHT_NORMAL, bodyFormat_);
+    format(11, DWRITE_FONT_WEIGHT_NORMAL, smallFormat_);
+    format(22, DWRITE_FONT_WEIGHT_BOLD, mediaTitleFormat_);
+    format(16, DWRITE_FONT_WEIGHT_NORMAL, mediaArtistFormat_);
 }
 
 void CompositionRenderer::CreateTargetBitmap()
@@ -252,8 +265,9 @@ void CompositionRenderer::DrawCachedText(const std::wstring& value, ViewRect rec
 
 void CompositionRenderer::Draw(const IslandView& view)
 {
+    ConfigureFonts(view.Layout().fontSize);
     const auto frame = view.Frame();
-    const auto bounds = view.Bounds();
+    auto bounds = view.Bounds();
     const auto& media = view.Media();
     context_->BeginDraw();
     context_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -282,11 +296,11 @@ void CompositionRenderer::Draw(const IslandView& view)
     context_->DrawLine({bounds.left + frame.radius, bounds.top + 1.5f},
         {bounds.right - frame.radius, bounds.top + 1.5f}, brush_.Get());
     // 内容随独立弹簧淡入；高度不足时不把文字、封面或均衡器挤进待机横线。
-    const float heightFade = std::clamp((frame.height - 18.0f) / 18.0f, 0.0f, 1.0f);
+    const float heightFade = std::clamp((frame.height / view.Layout().compactScale - 18.0f) / 18.0f, 0.0f, 1.0f);
     float alpha = frame.compactOpacity * heightFade * heightFade * (3.0f - 2.0f * heightFade);
     if (alpha < 0.001f && frame.opacity < 0.001f) return;
     if ((alpha > 0.001f && media.available) ||
-        (frame.opacity > 0.001f && frame.height >= 190 && view.Page() == IslandPage::Media && !view.TransientToast()))
+        (frame.opacity > 0.001f && view.Page() == IslandPage::Media && !view.TransientToast()))
         PrepareMedia(view);
     const auto text = [&](const std::wstring& value, ViewRect rect, float brightness = 1.0f, IDWriteTextFormat* font = nullptr)
     {
@@ -330,7 +344,13 @@ void CompositionRenderer::Draw(const IslandView& view)
     if (alpha > 0.001f)
     {
         context_->PushAxisAlignedClip(Rect(bounds), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        const float centerY = bounds.top + frame.height / 2;
+        const float compactScale = view.Layout().compactScale;
+        const auto actual = bounds;
+        const float cx = (bounds.left + bounds.right) / 2, cy = (bounds.top + bounds.bottom) / 2;
+        context_->SetTransform(D2D1::Matrix3x2F::Scale(compactScale, compactScale, {cx, cy}));
+        bounds = {cx + (bounds.left - cx) / compactScale, cy + (bounds.top - cy) / compactScale,
+            cx + (bounds.right - cx) / compactScale, cy + (bounds.bottom - cy) / compactScale};
+        const float centerY = cy;
         if (media.available)
         {
             cover(bounds.left + 16, centerY - 14, false);
@@ -356,17 +376,22 @@ void CompositionRenderer::Draw(const IslandView& view)
             context_->DrawEllipse(D2D1::Ellipse({bounds.left + 26, centerY}, 7, 7), brush_.Get(), 1.2f);
             context_->DrawLine({bounds.left + 26, centerY - 4}, {bounds.left + 26, centerY}, brush_.Get(), 1.2f);
             context_->DrawLine({bounds.left + 26, centerY}, {bounds.left + 29, centerY + 2}, brush_.Get(), 1.2f);
-            text(clock, {bounds.left + 46, centerY - 14, bounds.right - 38, centerY + 15}, 0.96f, titleFormat_.Get());
-            if (frame.hover > 0.1f)
+            const float clockWidth = bounds.right - bounds.left;
+            text(clock, {bounds.left + 46, centerY - 14, bounds.right - (clockWidth < 160 ? 12.0f : 38.0f), centerY + 15}, 0.96f, titleFormat_.Get());
+            if (frame.hover > 0.1f && clockWidth >= 180)
                 text(shortDate, {bounds.left + 116, centerY - 8, bounds.right - 12, centerY + 12}, 0.55f);
-            if (view.Battery().available && frame.hover < 0.1f)
+            if (view.Battery().available && frame.hover < 0.1f && clockWidth >= 160)
                 DrawBatteryIcon(view, bounds.right - 33, centerY - 5, alpha);
         }
+        bounds = actual;
+        context_->SetTransform(D2D1::Matrix3x2F::Identity());
         context_->PopAxisAlignedClip();
     }
     if (frame.opacity < 0.001f) return;
     alpha = frame.opacity;
-    context_->PushAxisAlignedClip(D2D1::RectF(bounds.left + 12, bounds.top + 12, bounds.right - 12, bounds.bottom - 12), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    const float contentInset = view.Page() == IslandPage::Media && !view.TransientToast() ?
+        12 * std::min(frame.width / 420.0f, frame.height / 200.0f) : 12;
+    context_->PushAxisAlignedClip(D2D1::RectF(bounds.left + contentInset, bounds.top + contentInset, bounds.right - contentInset, bounds.bottom - contentInset), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     const auto button = [&](ViewRect rect, const std::wstring& title)
     {
         brush_->SetColor(D2D1::ColorF(1, 1, 1, alpha * 0.065f));
@@ -380,7 +405,7 @@ void CompositionRenderer::Draw(const IslandView& view)
             const auto rect = view.VolumeButton(action);
             brush_->SetColor(D2D1::ColorF(1, 1, 1, alpha * 0.065f));
             context_->FillRoundedRectangle(D2D1::RoundedRect(Rect(rect), 8, 8), brush_.Get());
-            const float brightness = view.Volume().available ? 0.9f : 0.3f;
+            const float brightness = view.Volume().available && view.ControlsEnabled() ? 0.9f : 0.3f;
             brush_->SetColor(D2D1::ColorF(brightness, brightness, brightness, alpha));
             const float x = (rect.left + rect.right) / 2, y = (rect.top + rect.bottom) / 2;
             if (action == ViewAction::VolumeMute)
@@ -417,14 +442,21 @@ void CompositionRenderer::Draw(const IslandView& view)
             mint(); context_->FillRoundedRectangle(D2D1::RoundedRect(Rect(rect), 3, 3), brush_.Get());
         }
     };
-    const auto percent = view.Volume().available ? (view.Volume().muted ? std::wstring(L"静音") :
-        std::to_wstring(static_cast<int>(std::lround(view.Volume().level * 100))) + L"%") : std::wstring(L"无输出设备");
-    if (view.BatteryToast())
+    const auto percent = view.Volume().available ? (view.Volume().muted ? std::wstring(UiText(L"静音", L"Muted")) :
+        std::to_wstring(static_cast<int>(std::lround(view.Volume().level * 100))) + L"%") : std::wstring(UiText(L"无输出设备", L"No output"));
+    if (view.Notice())
+    {
+        text(view.NoticeTitle(), {bounds.left + 22, bounds.top + 14, bounds.right - 20, bounds.top + 36});
+        text(view.NoticeDetail(), {bounds.left + 22, bounds.top + 36, bounds.right - 20, bounds.top + 53}, .55f, smallFormat_.Get());
+        if (view.LinkNotice()) button(view.NoticeButton(true), UiText(L"打开", L"Open"));
+        button(view.NoticeButton(false), UiText(L"关闭", L"Dismiss"));
+    }
+    else if (view.BatteryToast())
     {
         DrawBatteryIcon(view, bounds.left + 26, bounds.top + 34, alpha, 1.5f);
-        text(L"电量偏低 · " + std::to_wstring(view.Battery().percent) + L"%",
+        text(std::wstring(UiText(L"电量偏低 · ", L"Low battery · ")) + std::to_wstring(view.Battery().percent) + L"%",
             {bounds.left + 66, bounds.top + 21, bounds.right - 24, bounds.top + 49}, 0.98f, titleFormat_.Get());
-        text(L"请连接电源", {bounds.left + 66, bounds.top + 53, bounds.right - 24, bounds.top + 74}, 0.55f);
+        text(UiText(L"请连接电源", L"Connect power"), {bounds.left + 66, bounds.top + 53, bounds.right - 24, bounds.top + 74}, 0.55f);
     }
     else if (view.VolumeToast())
     {
@@ -432,44 +464,19 @@ void CompositionRenderer::Draw(const IslandView& view)
         text(percent, {bounds.left + 66, bounds.top + 22, bounds.right - 88, bounds.top + 43});
         progress({bounds.left + 66, bounds.top + 51, bounds.right - 94, bounds.top + 55}, view.Volume().muted ? 0 : view.VolumeLevel());
     }
-    else if (frame.height >= 190)
+    else if (view.Page() == IslandPage::Media && media.available)
     {
-        const auto page = view.Page();
-        if (page != IslandPage::Media)
-        {
-        const auto close = view.CloseButton();
-        brush_->SetColor(D2D1::ColorF(1, 1, 1, alpha * 0.7f));
-        const float x = (close.left + close.right) / 2, y = (close.top + close.bottom) / 2;
-        context_->DrawLine({x - 5, y + 2}, {x, y - 3}, brush_.Get(), 1.5f);
-        context_->DrawLine({x, y - 3}, {x + 5, y + 2}, brush_.Get(), 1.5f);
-        }
-        const wchar_t* heading = page == IslandPage::Home ? L"WinHalo" : (page == IslandPage::Media ? L"正在播放" :
-            (page == IslandPage::Volume ? L"系统音量" : (page == IslandPage::Battery ? L"电池状态" : L"偏好设置")));
-        if (page != IslandPage::Media)
-            text(heading, {bounds.left + 24, bounds.top + 24, bounds.right - 65, bounds.top + 53}, 0.96f, titleFormat_.Get());
-        if (page == IslandPage::Home)
-        {
-            text(date, {bounds.left + 24, bounds.top + 58, bounds.right - 24, bounds.top + 80}, 0.55f);
-            int index = 0;
-            for (const auto module : {IslandPage::Media, IslandPage::Volume, IslandPage::Battery, IslandPage::Settings})
-            {
-                const auto rect = view.ModuleButton(module);
-                brush_->SetColor(D2D1::ColorF(1, 1, 1, alpha * 0.055f));
-                context_->FillRoundedRectangle(D2D1::RoundedRect(Rect(rect), 16, 16), brush_.Get());
-                brush_->SetColor(D2D1::ColorF(1, 1, 1, alpha * 0.055f));
-                context_->DrawRoundedRectangle(D2D1::RoundedRect(Rect(rect), 16, 16), brush_.Get());
-                const wchar_t* names[] = {L"音乐", L"音量", L"电池", L"设置"};
-                const std::wstring subtitle = module == IslandPage::Media ? (media.available ? (media.playing ? L"正在播放" : L"已暂停") : L"暂无媒体会话") :
-                    (module == IslandPage::Volume ? percent : (module == IslandPage::Battery ? (view.Battery().available ?
-                        (view.Battery().percent >= 0 ? std::to_wstring(view.Battery().percent) + L"%" : L"电量未知") : L"无电池") : L"动画与系统"));
-                text(names[index++], {rect.left + 16, rect.top + 16, rect.right - 16, rect.top + 40}, 0.95f);
-                text(subtitle, {rect.left + 16, rect.top + 47, rect.right - 16, rect.bottom - 10}, 0.52f, smallFormat_.Get());
-                mint(); context_->FillEllipse(D2D1::Ellipse({rect.right - 20, rect.top + 23}, 3, 3), brush_.Get());
-            }
-            text(L"常用操作，轻触即达", {bounds.left + 24, bounds.bottom - 44, bounds.right - 112, bounds.bottom - 20}, 0.4f);
-        }
-        else if (page == IslandPage::Media)
-        {
+        const auto actual = bounds;
+        const float fit = std::min((bounds.right - bounds.left) / 420.0f, (bounds.bottom - bounds.top) / 200.0f);
+        const float originX = (bounds.left + bounds.right - 420 * fit) / 2;
+        const float originY = (bounds.top + bounds.bottom - 200 * fit) / 2;
+        const auto transform = D2D1::Matrix3x2F::Scale(fit, fit) * D2D1::Matrix3x2F::Translation(originX, originY);
+        context_->SetTransform(transform);
+        bounds = {0, 0, 420, 200};
+        const auto logical = [&](ViewRect rect) {
+            return ViewRect{(rect.left - originX) / fit, (rect.top - originY) / fit,
+                (rect.right - originX) / fit, (rect.bottom - originY) / fit};
+        };
             cover(bounds.left + 28, bounds.top + 24, true);
             for (size_t i : {size_t{0}, size_t{1}})
             {
@@ -494,7 +501,7 @@ void CompositionRenderer::Draw(const IslandView& view)
             }
             for (const auto action : {ViewAction::MediaPrevious, ViewAction::MediaToggle, ViewAction::MediaNext})
             {
-                const auto rect = view.MediaButton(action);
+                const auto rect = logical(view.MediaButton(action));
                 const bool enabled = media.available && (action == ViewAction::MediaPrevious ? media.canPrevious :
                     (action == ViewAction::MediaNext ? media.canNext : media.canToggle));
                 const float bright = enabled ? 0.92f : 0.28f;
@@ -508,9 +515,9 @@ void CompositionRenderer::Draw(const IslandView& view)
                 else
                 {
                     const float direction = action == ViewAction::MediaPrevious ? -1.0f : 1.0f;
-                    context_->SetTransform(D2D1::Matrix3x2F::Scale(direction, 1) * D2D1::Matrix3x2F::Translation(bx, by));
+                    context_->SetTransform(D2D1::Matrix3x2F::Scale(direction, 1) * D2D1::Matrix3x2F::Translation(bx, by) * transform);
                     context_->FillGeometry(playGlyph_.Get(), brush_.Get());
-                    context_->SetTransform(D2D1::Matrix3x2F::Identity());
+                    context_->SetTransform(transform);
                     if (action != ViewAction::MediaToggle)
                         context_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(bx + direction * 15 - 2, by - 12,
                             bx + direction * 15 + 2, by + 12), 1.5f, 1.5f), brush_.Get());
@@ -536,51 +543,10 @@ void CompositionRenderer::Draw(const IslandView& view)
                 text(media.sessions.size() > 9 ? L"9+" : std::to_wstring(media.sessions.size()),
                     {badgeX + 9, badgeY + 5, badgeX + 25, badgeY + 23}, 0.8f, smallFormat_.Get());
             }
-            text(!media.appError.empty() ? L"打开失败" : (media.available ? (media.playing ? L"播放中" : L"已暂停") : L"无会话"),
+            text(!media.appError.empty() ? UiText(L"打开失败", L"Open failed") : (media.available ? (media.playing ? UiText(L"播放中", L"Playing") : UiText(L"已暂停", L"Paused")) : UiText(L"无会话", L"No session")),
                 {bounds.right - 62, bounds.top + 153, bounds.right - 16, bounds.top + 174}, 0.42f, smallFormat_.Get());
-        }
-        else if (page == IslandPage::Volume)
-        {
-            text(L"默认音频输出", {bounds.left + 24, bounds.top + 58, bounds.right - 24, bounds.top + 82}, 0.5f);
-            text(percent, {bounds.left + 24, bounds.top + 104, bounds.right - 24, bounds.top + 135}, 0.95f, titleFormat_.Get());
-            progress({bounds.left + 24, bounds.top + 146, bounds.right - 24, bounds.top + 152}, view.Volume().muted ? 0 : view.VolumeLevel());
-            volumeControls();
-            text(view.Volume().available ? L"每次调整 5%" : L"连接音频输出设备后可使用", {bounds.left + 24, bounds.top + 223, bounds.right - 24, bounds.top + 245}, 0.5f);
-        }
-        else if (page == IslandPage::Battery)
-        {
-            const auto& battery = view.Battery();
-            text(battery.available ? (battery.charging ? L"正在充电" : (battery.onBattery ? L"使用电池" : L"已连接电源")) : L"当前设备未提供电池状态",
-                {bounds.left + 24, bounds.top + 58, bounds.right - 24, bounds.top + 82}, 0.5f);
-            if (battery.available) DrawBatteryIcon(view, bounds.left + 24, bounds.top + 111, alpha, 2);
-            text(battery.available ? (battery.percent >= 0 ? std::to_wstring(battery.percent) + L"%" : L"电量未知") : L"无电池",
-                {bounds.left + 86, bounds.top + 105, bounds.right - 24, bounds.top + 140}, 0.95f, titleFormat_.Get());
-            text(L"使用电池且电量 ≤ 20% 时提醒", {bounds.left + 24, bounds.top + 168, bounds.right - 24, bounds.top + 196}, 0.55f);
-            text(L"接通电源后自动收起低电量提示", {bounds.left + 24, bounds.top + 202, bounds.right - 24, bounds.top + 230}, 0.4f);
-        }
-        else
-        {
-            text(view.SystemSettings() ? (view.SystemError().empty() ? L"启动、显示与材质" : view.SystemError()) : L"让灵动岛按你的节奏运行",
-                {bounds.left + 24, bounds.top + 58, bounds.right - 24, bounds.top + 82}, 0.52f);
-            const auto row = [&](ViewRect rect, const std::wstring& name, const std::wstring& value)
-            {
-                button(rect, name);
-                text(value, {rect.right - 65, rect.top + 11, rect.right - 8, rect.bottom}, 0.9f);
-            };
-            row(view.SpeedButton(), view.SystemSettings() ? L"开机启动" : L"动画速度", view.SystemSettings() ?
-                (view.StartupAvailable() ? (view.StartupEnabled() ? L"开启" : L"关闭") : L"不可用") : std::to_wstring(view.Parameters().speed).substr(0, 3) + L"×");
-            row(view.MotionButton(), view.SystemSettings() ? L"全屏自动隐藏" : L"减少动态效果", view.SystemSettings() ?
-                (view.AutoHideFullscreen() ? L"开启" : L"关闭") : (view.ReducedMotion() ? L"开启" : L"关闭"));
-            if (view.SystemSettings())
-            {
-                row(view.GlassButton(), L"桌面模糊", view.GlassAvailable() ? (view.NativeGlassEnabled() ? L"开启" : L"关闭") : L"不可用");
-                text(view.GlassStatus(), {bounds.left + 24, bounds.top + 242, bounds.right - 24, bounds.top + 265}, 0.42f, smallFormat_.Get());
-            }
-            button(view.SettingsPageButton(), view.SystemSettings() ? L"动画" : L"系统");
-            text(view.SaveFailed() ? L"设置未能保存" : L"Ctrl+Alt+I", {bounds.left + 116, bounds.bottom - 45, bounds.right - 108, bounds.bottom - 22}, 0.4f, smallFormat_.Get());
-        }
-        if (page != IslandPage::Home && page != IslandPage::Settings && page != IslandPage::Media) button(view.BackButton(), L"首页");
-        if (page != IslandPage::Media) button(view.SettingsButton(), page == IslandPage::Settings ? L"返回" : L"设置");
+        bounds = actual;
+        context_->SetTransform(D2D1::Matrix3x2F::Identity());
     }
     context_->PopAxisAlignedClip();
 }
@@ -591,16 +557,17 @@ void CompositionRenderer::PrepareMedia(const IslandView& view)
     const std::array<std::wstring, 6> strings = {
         media.available ? (media.title.empty() ? L"未提供标题" : media.title) : L"没有正在播放的媒体",
         media.available ? (media.artist.empty() ? L"未提供艺术家" : media.artist) : L"打开支持系统媒体控制的播放器",
-        !media.error.empty() ? media.error : (media.available ? (media.playing ? L"正在播放" : L"已暂停") : L"播放器接入系统媒体控制后可用"),
+        !media.error.empty() ? media.error : (media.available ? (media.playing ? L"正在播放" : UiText(L"已暂停", L"Paused")) : L"播放器接入系统媒体控制后可用"),
         media.album,
         media.title.empty() ? L"未提供标题" : media.title,
-        media.artist.empty() ? (media.playing ? L"正在播放" : L"已暂停") : media.artist};
-    const float width = view.Layout().expandedWidth - 156;
+        media.artist.empty() ? (media.playing ? L"正在播放" : UiText(L"已暂停", L"Paused")) : media.artist};
+    const float width = 420 - 156;
+    const float compactWidth = std::max(300.0f, view.Layout().width) - 108;
     for (size_t i = 0; i < strings.size(); ++i)
     {
-        if (mediaLabels_[i] && mediaText_[i] == strings[i] && mediaTextWidth_ == width) continue;
+        if (mediaLabels_[i] && mediaText_[i] == strings[i] && mediaTextWidth_ == width && compactTextWidth_ == compactWidth) continue;
         mediaLabels_[i].Reset();
-        const float textWidth = i >= 4 ? std::min(300.0f, view.Layout().expandedWidth) - 108 : (i >= 2 ? width + 116 : width);
+        const float textWidth = i >= 4 ? compactWidth : (i >= 2 ? width + 116 : width);
         auto* font = i == 0 ? mediaTitleFormat_.Get() : (i == 1 ? mediaArtistFormat_.Get() : bodyFormat_.Get());
         Check(writeFactory_->CreateTextLayout(strings[i].c_str(), static_cast<UINT32>(strings[i].size()),
             font, textWidth, i == 0 ? 32.0f : 24.0f, &mediaLabels_[i]), "Create media text layout");
@@ -612,6 +579,7 @@ void CompositionRenderer::PrepareMedia(const IslandView& view)
         mediaText_[i] = strings[i];
     }
     mediaTextWidth_ = width;
+    compactTextWidth_ = compactWidth;
     if (media.app != iconApp_)
     {
         appIcon_.Reset(); iconApp_ = media.app;

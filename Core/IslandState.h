@@ -9,6 +9,6 @@ enum class WindowEvent { PointerEnter, PointerLeave, Click, TogglePanel, Setting
 enum class ViewAction { Toggle, Collapse, Settings, Back, Speed, ReducedMotion,
     MediaToggle, MediaPrevious, MediaNext, VolumeDown, VolumeUp, VolumeMute, None,
     SystemSettings, AnimationSettings, Startup, AutoHideFullscreen, OpenMedia, OpenVolume, OpenBattery, Home, NativeGlass,
-    OpenMediaApp, NextMediaSession, RevealCapsule };
+    OpenMediaApp, NextMediaSession, RevealCapsule, OpenLink, DismissNotice };
 enum class IslandPage { Home, Media, Volume, Battery, Settings };
 }

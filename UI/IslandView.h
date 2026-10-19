@@ -18,7 +18,12 @@ struct IslandLayout
     float insetTop = 16.0f;
     float topGap = 12.0f;
     float expandedWidth = 420.0f;
-    float expandedHeight = 340.0f;
+    float expandedHeight = 200.0f;
+    float compactScale = 1.0f;
+    float expandedScale = 1.0f;
+    float offsetX = 0.0f, offsetY = 0.0f;
+    float fontSize = 0.0f;
+    float lineWidth = 88.0f;
 };
 
 struct CapsuleFrame
@@ -77,13 +82,23 @@ public:
     bool SaveFailed() const noexcept { return saveFailed_; }
     void CycleDebugSize();
     void Configure(SpringParameters parameters, bool reducedMotion);
+    void ApplyLayout(IslandLayout layout, bool autoHideIdle);
+    void SetControlsEnabled(bool enabled) noexcept { controlsEnabled_ = enabled; }
+    bool ControlsEnabled() const noexcept { return controlsEnabled_; }
+    void ShowNotice(std::wstring title, std::wstring detail, bool link = false);
+    bool Notice() const noexcept { return notice_; }
+    bool LinkNotice() const noexcept { return notice_ && linkNotice_; }
+    std::uint64_t NoticeRevision() const noexcept { return noticeRevision_; }
+    const std::wstring& NoticeTitle() const noexcept { return noticeTitle_; }
+    const std::wstring& NoticeDetail() const noexcept { return noticeDetail_; }
+    ViewRect NoticeButton(bool open) const noexcept;
     bool Step(double seconds);
     bool Animating() const noexcept { return animation_.Active() || volumeLevel_.Active(); }
     bool Expanded() const noexcept { return expanded_; }
     bool Settings() const noexcept { return settings_; }
     bool VolumeToast() const noexcept { return volumeToast_; }
     bool BatteryToast() const noexcept { return batteryToast_; }
-    bool TransientToast() const noexcept { return volumeToast_ || batteryToast_; }
+    bool TransientToast() const noexcept { return volumeToast_ || batteryToast_ || notice_; }
     void SetBattery(BatterySnapshot snapshot, bool showNotification);
     const BatterySnapshot& Battery() const noexcept { return battery_; }
     void DismissTransientToast();
@@ -136,6 +151,11 @@ private:
     bool pointerInside_ = false;
     bool idlePaused_ = false;
     bool hostVisible_ = true;
+    bool autoHideIdle_ = true;
+    bool controlsEnabled_ = true;
+    bool notice_ = false, linkNotice_ = false;
+    std::uint64_t noticeRevision_ = 0;
+    std::wstring noticeTitle_, noticeDetail_;
     Clock::time_point idleDeadline_ = Clock::time_point::max();
     IslandPage page_ = IslandPage::Home;
     bool nativeGlass_ = false, glassAvailable_ = false, glassActive_ = false;

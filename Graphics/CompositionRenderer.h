@@ -34,6 +34,7 @@ private:
     void CreateDevice(HWND window);
     void CreateTargetBitmap();
     void Draw(const IslandView& view);
+    void ConfigureFonts(float size);
     void DrawCachedText(const std::wstring& value, ViewRect rect, IDWriteTextFormat* font);
     void DrawBatteryIcon(const IslandView& view, float x, float y, float opacity, float scale = 1.0f);
     void PrepareMedia(const IslandView& view);
@@ -69,6 +70,8 @@ private:
     std::shared_ptr<const MediaAppInfo> iconApp_;
     std::uint64_t artworkRevision_ = 0;
     float mediaTextWidth_ = 0;
+    float compactTextWidth_ = 0;
+    float fontSize_ = -1;
     Ptr<IDCompositionDevice> composition_;
     Ptr<IDCompositionTarget> target_;
     Ptr<IDCompositionVisual> visual_;

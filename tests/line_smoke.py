@@ -19,6 +19,7 @@ def main():
     if '--allow-existing' not in sys.argv:
         assert not u.FindWindowW('WinHalo.NativeIslandWindow', None), 'Close existing WinHalo or use --allow-existing'
     executable = Path(sys.argv[1] if len(sys.argv) > 1 else 'x64/Release/WinHalo.exe').resolve()
+    desktop.bind(u, 'SetForegroundWindow', w.BOOL, w.HWND)
     desktop.bind(u, 'SetWindowPos', w.BOOL, w.HWND, w.HWND,
                  c.c_int, c.c_int, c.c_int, c.c_int, w.UINT)
     cursor = w.POINT(); assert u.GetCursorPos(c.byref(cursor))
@@ -71,7 +72,7 @@ def main():
         def compact():
             width, height = desktop.region_size(app)
             return 175 <= width <= 195 and 40 <= height <= 65
-        def panel(): return desktop.region_size(app)[1] > 300
+        def panel(): return bool(desktop.owned_window(process.pid, 'WinHalo.SettingsWindow'))
         def wait(predicate, message, seconds=3):
             until = time.monotonic() + seconds
             while time.monotonic() < until:
@@ -136,15 +137,17 @@ def main():
         assert compact(), 'Panel hotkey bypassed the no-player compact policy'
         at = point(240, 38)
         desktop.select_tray_item(app, at.x, at.y, 2)  # Settings remains explicitly reachable.
-        wait(panel, 'Tray Settings did not open its full panel')
+        wait(panel, 'Tray Settings did not open its independent window')
         move(5, 100); desktop.pump(5.5)
         assert panel(), 'Full panel incorrectly used the compact idle timeout'
-        click(415, 51); wait(compact, 'Panel close skipped the compact stage')
+        desktop.send(desktop.owned_window(process.pid, 'WinHalo.SettingsWindow'), 0x10)
+        if foreground: assert u.SetForegroundWindow(foreground)
+        desktop.reveal_capsule(app); wait(compact, 'Closing settings did not preserve the island')
 
         # Context menu time does not consume the grace period.
         desktop.reveal_capsule(app); move(5, 100)
         at = point(240, 38)
-        assert u.PostMessageW(app, 0x7B, app, (at.y << 16) | (at.x & 0xFFFF))
+        assert u.PostMessageW(app, 0x8015, (at.y << 16) | (at.x & 0xFFFF), (1 << 16) | 0x7B)
         deadline = time.monotonic() + 3
         menu = None
         while time.monotonic() < deadline:
@@ -178,9 +181,10 @@ def main():
         wait(compact, 'Hidden time consumed the capsule grace period')
         desktop.pump(3.7); assert compact(), 'Restored capsule collapsed too soon'
         wait(line, 'Restored capsule never returned to line', 2.5)
+        desktop.pump(0.8)  # Let the spring settle past its first target crossing.
         # No-player panel requests cannot reveal a line or extend a clock's deadline.
         desktop.send(app, 0x312, 3); desktop.pump(0.3)
-        assert line(), 'No-player hotkey revealed or expanded the idle line'
+        assert line(), 'No-player hotkey changed the idle line: ' + str(desktop.region_size(app))
         desktop.reveal_capsule(app); move(5, 100); hold(3.7, 5, 100)
         desktop.send(app, 0x312, 3)
         assert compact(), 'No-player hotkey changed the clock compact state'

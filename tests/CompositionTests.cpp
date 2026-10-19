@@ -5,6 +5,8 @@
 #include <iostream>
 #include <dwmapi.h>
 #include <roapi.h>
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #pragma comment(lib, "dwmapi.lib")
 
@@ -273,6 +275,55 @@ void TestDynamicContent(CompositionRenderer& renderer, HWND window, IslandView& 
     Submit(renderer, window, view);
     FlushDesktop();
     Expect(renderer.HitTest({210, 110}) && view.SystemSettings(), "System settings did not render");
+
+    // A small player must scale its content clip with the controls. The left
+    // side of the source icon lies within 12 DIP of the panel edge, so a
+    // fixed 12-DIP clip would remove this otherwise visible part of the icon.
+    auto smallLayout = IslandLayout{};
+    smallLayout.expandedWidth = 320;
+    smallLayout.expandedHeight = 200;
+    smallLayout.expandedScale = .5f;
+    view.ApplyLayout(smallLayout, true);
+    view.Configure({}, true);
+    view.SetMedia(FixtureMedia());
+    view.ShowPage(IslandPage::Media);
+    Submit(renderer, window, view);
+    FlushDesktop();
+    const auto smallBounds = view.Bounds();
+    const float fit = std::min((smallBounds.right - smallBounds.left) / 420.0f,
+        (smallBounds.bottom - smallBounds.top) / 200.0f);
+    const float originX = (smallBounds.left + smallBounds.right - 420 * fit) / 2;
+    const float originY = (smallBounds.top + smallBounds.bottom - 200 * fit) / 2;
+    const POINT sourceLeft{static_cast<LONG>(std::lround(originX + 24 * fit)),
+        static_cast<LONG>(std::lround(originY + 160 * fit))};
+    const auto smallIcon = ScreenPixel(window, sourceLeft.x, sourceLeft.y);
+    Expect(GetGValue(smallIcon) > 180 && GetRValue(smallIcon) < 100 && GetBValue(smallIcon) < 70,
+        "Small player clipped the left side of its green source icon");
+    Expect(renderer.HitTest(sourceLeft), "Visible small source icon lost its native hit region");
+    for (const auto action : {ViewAction::MediaPrevious, ViewAction::MediaToggle, ViewAction::MediaNext})
+    {
+        const auto button = view.MediaButton(action);
+        const float x = (button.left + button.right) / 2, y = (button.top + button.bottom) / 2;
+        Expect(view.ActionAt(x, y) == action, "Small player control did not match its scaled hit target");
+        Expect(renderer.HitTest({static_cast<LONG>(std::lround(x)), static_cast<LONG>(std::lround(y))}),
+            "Small player control lies outside the visible native region");
+    }
+    const auto sourceButton = view.MediaSourceButton();
+    Expect(view.ActionAt((sourceButton.left + sourceButton.right) / 2,
+        (sourceButton.top + sourceButton.bottom) / 2) == ViewAction::NextMediaSession,
+        "Small player source control did not select its second synthetic session");
+    smallLayout.fontSize = 28;
+    view.ApplyLayout(smallLayout, true);
+    Submit(renderer, window, view);
+    FlushDesktop();
+    Expect(view.Expanded() && view.Page() == IslandPage::Media,
+        "Large font configuration changed the small player's page");
+
+    // Later line-content checks use default geometry and automatic fonts.
+    view.ApplyLayout(IslandLayout{}, true);
+    view.SetMedia({});
+    view.ShowLine();
+    Submit(renderer, window, view);
     ShowWindow(window, SW_HIDE);
     // Other desktop applications may switch foreground during the pixel scan;
     // the renderer's NOACTIVATE window must never become the foreground window.
@@ -320,7 +371,7 @@ int main()
         }
         const auto upgraded = store.Load();
         Expect(upgraded.layout.width == 180 && upgraded.layout.height == 44 && upgraded.layout.radius == 22 &&
-            upgraded.layout.expandedWidth == 420 && upgraded.layout.expandedHeight == 340 && upgraded.spring.speed == 1.5 && !upgraded.autoHideFullscreen,
+            upgraded.layout.expandedWidth == 420 && upgraded.layout.expandedHeight == 200 && upgraded.spring.speed == 1.5 && !upgraded.autoHideFullscreen,
             "Version 1 migration lost preferences or kept obsolete default dimensions");
         window = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             L"STATIC", L"WinHalo composition test", WS_POPUP, 0, 0, 480, 400, nullptr, nullptr,
@@ -381,6 +432,7 @@ int main()
             "24 buffer resizes, line/capsule/expanded hit regions, bounded GDI resources, device recreations; "
             "synthetic premultiplied covers, revision changes and post-reset cover restoration, long title trimming, "
             "16 dynamic media updates, rendered volume/mute and battery toast, system settings and legacy JSON; "
+            "small-player source-icon pixels and scaled controls, large-font submission; "
             "graphite line, transparent host and 16 hidden media updates with latest-cover reveal (no real media or audio session)\n";
         return 0;
     }

@@ -3,12 +3,44 @@
 #include <fstream>
 #include <iterator>
 #include <algorithm>
+#include <cmath>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
 namespace winisland
 {
 using namespace winrt::Windows::Data::Json;
+
+void NormalizeConfiguration(Configuration& config) noexcept
+{
+    const auto limit = [](float value, float low, float high, float fallback) {
+        return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+    };
+    auto& l = config.layout;
+    l.width = limit(l.width, 120, 400, 180);
+    l.height = limit(l.height, 32, 88, 44);
+    l.compactScale = limit(l.compactScale, .5f, 2, 1);
+    l.expandedScale = limit(l.expandedScale, .5f, 2, 1);
+    l.expandedWidth = limit(l.expandedWidth, 320, 900, 420);
+    l.expandedHeight = limit(l.expandedHeight, 200, 600, 200);
+    l.offsetX = limit(l.offsetX, -8192, 8192, 0);
+    l.offsetY = limit(l.offsetY, -8192, 8192, 0);
+    l.fontSize = !std::isfinite(l.fontSize) || l.fontSize <= 0 ? 0 : std::clamp(l.fontSize, 10.0f, 28.0f);
+    l.lineWidth = limit(l.lineWidth, 24, 240, 88);
+    l.radius = std::max(22.0f, l.height / 2);
+    l.insetTop = 16;
+    l.topGap = limit(l.topGap, 0, 200, 12);
+    // Resize the transparent host only on a settings change, never during a spring.
+    l.hostWidth = std::max({480.0f, l.expandedWidth * l.expandedScale + 60,
+        std::max(l.width, 300.0f) * l.compactScale + 80});
+    l.hostHeight = std::max({400.0f, l.expandedHeight * l.expandedScale + l.insetTop + 48,
+        std::max(l.height, 100.0f) * l.compactScale + l.insetTop + 48});
+    if (config.language != L"system" && config.language != L"zh-CN" && config.language != L"en-US")
+        config.language = L"system";
+    if (config.monitorDevice.size() > 128) config.monitorDevice.clear();
+    try { Spring spring; spring.Configure(config.spring); }
+    catch (...) { config.spring = {}; }
+}
 
 Configuration ConfigurationStore::Load() noexcept
 {
@@ -22,7 +54,7 @@ Configuration ConfigurationStore::Load() noexcept
         const std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         const auto json = JsonObject::Parse(winrt::to_hstring(bytes));
         const double version = json.GetNamedNumber(L"version", 1);
-        if (version != 1 && version != 2) throw std::runtime_error("Unsupported settings version");
+        if (version != 1 && version != 2 && version != 3) throw std::runtime_error("Unsupported settings version");
         Configuration config;
         config.layout.width = static_cast<float>(json.GetNamedNumber(L"width", config.layout.width));
         config.layout.height = static_cast<float>(json.GetNamedNumber(L"height", config.layout.height));
@@ -37,6 +69,20 @@ Configuration ConfigurationStore::Load() noexcept
         config.reducedMotion = json.GetNamedBoolean(L"reducedMotion", false);
         config.autoHideFullscreen = json.GetNamedBoolean(L"autoHideFullscreen", true);
         config.nativeGlass = json.GetNamedBoolean(L"nativeGlass", false);
+        config.layout.compactScale = static_cast<float>(json.GetNamedNumber(L"compactScale", 1));
+        config.layout.expandedScale = static_cast<float>(json.GetNamedNumber(L"expandedScale", 1));
+        config.layout.offsetX = static_cast<float>(json.GetNamedNumber(L"offsetX", 0));
+        config.layout.offsetY = static_cast<float>(json.GetNamedNumber(L"offsetY", 0));
+        config.layout.fontSize = static_cast<float>(json.GetNamedNumber(L"fontSize", 0));
+        config.layout.lineWidth = static_cast<float>(json.GetNamedNumber(L"lineWidth", 88));
+        config.autoHideIdle = json.GetNamedBoolean(L"autoHideIdle", true);
+        config.rightDrag = json.GetNamedBoolean(L"rightDrag", true);
+        config.showNotifications = json.GetNamedBoolean(L"showNotifications", true);
+        config.systemControls = json.GetNamedBoolean(L"systemControls", true);
+        config.clipboardLinks = json.GetNamedBoolean(L"clipboardLinks", false);
+        config.privacyIndicators = json.GetNamedBoolean(L"privacyIndicators", false);
+        config.monitorDevice = json.GetNamedString(L"monitorDevice", L"");
+        config.language = json.GetNamedString(L"language", L"system");
         if (version == 1)
         {
             if (config.layout.width == 120) config.layout.width = 180;
@@ -45,9 +91,8 @@ Configuration ConfigurationStore::Load() noexcept
             if (config.layout.expandedWidth == 380) config.layout.expandedWidth = 420;
             if (config.layout.expandedHeight == 240) config.layout.expandedHeight = 340;
         }
-        config.layout.height = std::max(44.0f, config.layout.height);
-        config.layout.radius = std::max(22.0f, config.layout.radius);
-        config.layout.expandedHeight = std::max(340.0f, config.layout.expandedHeight);
+        if (version < 3) config.layout.expandedHeight = 200;
+        NormalizeConfiguration(config);
         IslandView validateLayout(config.layout);
         Spring validateSpring;
         validateSpring.Configure(config.spring);
@@ -65,13 +110,19 @@ bool ConfigurationStore::Save(const Configuration& config) noexcept
     {
         JsonObject json;
         const auto number = [&](const wchar_t* key, double value) { json.Insert(key, JsonValue::CreateNumberValue(value)); };
-        number(L"version", 2);
+        number(L"version", 3);
         number(L"width", config.layout.width);
         number(L"height", config.layout.height);
         number(L"radius", config.layout.radius);
         number(L"topGap", config.layout.topGap);
         number(L"expandedWidth", config.layout.expandedWidth);
         number(L"expandedHeight", config.layout.expandedHeight);
+        number(L"compactScale", config.layout.compactScale);
+        number(L"expandedScale", config.layout.expandedScale);
+        number(L"offsetX", config.layout.offsetX);
+        number(L"offsetY", config.layout.offsetY);
+        number(L"fontSize", config.layout.fontSize);
+        number(L"lineWidth", config.layout.lineWidth);
         number(L"stiffness", config.spring.stiffness);
         number(L"damping", config.spring.damping);
         number(L"mass", config.spring.mass);
@@ -79,6 +130,14 @@ bool ConfigurationStore::Save(const Configuration& config) noexcept
         json.Insert(L"reducedMotion", JsonValue::CreateBooleanValue(config.reducedMotion));
         json.Insert(L"autoHideFullscreen", JsonValue::CreateBooleanValue(config.autoHideFullscreen));
         json.Insert(L"nativeGlass", JsonValue::CreateBooleanValue(config.nativeGlass));
+        json.Insert(L"autoHideIdle", JsonValue::CreateBooleanValue(config.autoHideIdle));
+        json.Insert(L"rightDrag", JsonValue::CreateBooleanValue(config.rightDrag));
+        json.Insert(L"showNotifications", JsonValue::CreateBooleanValue(config.showNotifications));
+        json.Insert(L"systemControls", JsonValue::CreateBooleanValue(config.systemControls));
+        json.Insert(L"clipboardLinks", JsonValue::CreateBooleanValue(config.clipboardLinks));
+        json.Insert(L"privacyIndicators", JsonValue::CreateBooleanValue(config.privacyIndicators));
+        json.Insert(L"monitorDevice", JsonValue::CreateStringValue(config.monitorDevice));
+        json.Insert(L"language", JsonValue::CreateStringValue(config.language));
         const auto folder = DataDirectory();
         std::filesystem::create_directories(folder);
         const auto temporary = folder / L"settings.json.tmp";

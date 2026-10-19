@@ -7,8 +7,11 @@
 #include "../Services/BatteryService.h"
 #include "../Services/FullscreenMonitor.h"
 #include "../Services/StartupRegistration.h"
+#include "../Services/BehaviorService.h"
+#include "../Window/SettingsWindow.h"
 #include <chrono>
 #include <memory>
+#include <optional>
 
 namespace winisland
 {
@@ -28,6 +31,11 @@ private:
     void RefreshBattery();
     void RefreshDesktop();
     void ReadSystemOptions(std::wstring error = {});
+    void ShowSettings();
+    void ApplyConfiguration(Configuration configuration);
+    void RefreshSettings();
+    void OnWheel(int steps, bool brightness);
+    void OnClipboard();
     DWORD ContentTimeout() const noexcept;
     std::wstring Diagnostics() const;
     // 服务先停止，再销毁窗口；日志最后释放。
@@ -37,9 +45,17 @@ private:
     IslandView view_;
     CompositionRenderer renderer_;
     IslandWindow window_;
+    SettingsWindow settings_;
+    SettingsStatus settingsStatus_;
     std::shared_ptr<ServiceMailbox> mailbox_;
     MediaService mediaService_;
     VolumeService volumeService_;
+    BehaviorService behaviorService_;
+    BehaviorSnapshot behavior_;
+    std::wstring pendingLink_, lastLink_;
+    bool brightnessRequested_ = false;
+    std::optional<float> pendingVolume_;
+    std::chrono::steady_clock::time_point volumeInputAt_{};
     BatteryService batteryService_;
     FullscreenMonitor fullscreenMonitor_;
     StartupRegistration startup_;

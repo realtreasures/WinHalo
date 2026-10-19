@@ -1,5 +1,6 @@
 #include "IslandWindow.h"
 #include "../Utils/Win32Error.h"
+#include "../Utils/Localization.h"
 #include "../Resource.h"
 #include <algorithm>
 #include <cmath>
@@ -16,8 +17,8 @@ constexpr wchar_t WindowClass[] = L"WinHalo.NativeIslandWindow";
 constexpr int VisibilityHotkey = 1;
 constexpr int QuitHotkey = 2;
 constexpr int PanelHotkey = 3;
-enum MenuCommand : UINT { Center = 1001, NextMonitor, Hide, About, Exit,
-    TogglePanel, Settings, Performance, StressTest, DebugSize, RecreateDevice };
+constexpr UINT_PTR RightHoldTimer = 1;
+constexpr UINT RightHoldMilliseconds = 400;
 enum TrayCommand : UINT { TrayToggle = 1101, TrayExpand, TraySettings, TrayExit };
 struct MenuDeleter { void operator()(HMENU menu) const noexcept { if (menu) DestroyMenu(menu); } };
 using Menu = std::unique_ptr<std::remove_pointer_t<HMENU>, MenuDeleter>;
@@ -27,6 +28,22 @@ LONG ToPixels(float dip, UINT dpi)
 {
     return static_cast<LONG>(std::lround(dip * static_cast<float>(dpi) / 96.0f));
 }
+
+MONITORINFOEXW MonitorInfo(HMONITOR monitor)
+{
+    MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+    CheckWin32(GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&info)), "GetMonitorInfoW");
+    return info;
+}
+
+void ClampIslandPosition(LONG& x, LONG& y, const RECT& work, const IslandView& view, UINT dpi)
+{
+    const auto bounds = view.Bounds();
+    const LONG left = ToPixels(bounds.left, dpi), right = ToPixels(bounds.right, dpi);
+    const LONG top = ToPixels(bounds.top, dpi), bottom = ToPixels(bounds.bottom, dpi);
+    x = std::clamp(x, work.left - left, std::max(work.left - left, work.right - right));
+    y = std::clamp(y, work.top - top, std::max(work.top - top, work.bottom - bottom));
+}
 }
 
 IslandWindow::IslandWindow(HINSTANCE instance, IRenderer& renderer, IslandView& view, Logger& logger)
@@ -34,6 +51,11 @@ IslandWindow::IslandWindow(HINSTANCE instance, IRenderer& renderer, IslandView& 
 
 IslandWindow::~IslandWindow()
 {
+    if (window_)
+    {
+        KillTimer(window_, RightHoldTimer);
+        if (clipboardListening_) RemoveClipboardFormatListener(window_);
+    }
     outsideClicks_.Stop();
     if (sourceTooltip_) DestroyWindow(sourceTooltip_);
     backdrop_.Hide();
@@ -60,7 +82,7 @@ void IslandWindow::Create(EventHandler handler, bool show)
     window_ = CreateWindowExW(renderer_.WindowStyle() | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         WindowClass, L"WinHalo", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, instance_, this);
     if (!window_) ThrowLastError("CreateWindowExW");
-    PositionOnMonitor(MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY));
+    PositionOnMonitor(PreferredMonitor());
     backdrop_.Initialize(window_);
     SetNativeGlass(false);
     RethrowWindowError();
@@ -74,7 +96,7 @@ void IslandWindow::Create(EventHandler handler, bool show)
         "Ctrl+Alt+I is unavailable; use the system tray to restore the island" :
         "Ctrl+Alt+I and system tray are unavailable; Hide menu item disabled");
     if (!quitHotkey_) logger_.Write("Ctrl+Alt+Q is unavailable; use the Exit menu item");
-    if (!panelHotkey_) logger_.Write("Ctrl+Alt+Space is unavailable; use the capsule or context menu");
+    if (!panelHotkey_) logger_.Write("Ctrl+Alt+Space is unavailable; use the media capsule or system tray");
     if (show) ApplyVisibility();
     else if (handler_) handler_(WindowEvent::WindowHidden);
     INITCOMMONCONTROLSEX common{sizeof(common), ICC_WIN95_CLASSES}; InitCommonControlsEx(&common);
@@ -82,6 +104,39 @@ void IslandWindow::Create(EventHandler handler, bool show)
         TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window_, nullptr, instance_, nullptr);
     if (sourceTooltip_) SendMessageW(sourceTooltip_, TTM_SETMAXTIPWIDTH, 0, 300);
+    SyncClipboardListener();
+}
+
+void IslandWindow::ApplyPreferences(const Configuration& configuration)
+{
+    const bool positionChanged = !preferencesApplied_ ||
+        preferences_.monitorDevice != configuration.monitorDevice ||
+        preferences_.layout.offsetX != configuration.layout.offsetX || preferences_.layout.offsetY != configuration.layout.offsetY ||
+        preferences_.layout.topGap != configuration.layout.topGap ||
+        preferences_.layout.hostWidth != configuration.layout.hostWidth || preferences_.layout.hostHeight != configuration.layout.hostHeight;
+    if (rightButtonDown_ && !configuration.rightDrag) FinishRightPress(true);
+    preferences_ = configuration;
+    preferencesApplied_ = true;
+    if (!configuration.systemControls) wheelRemainder_ = 0;
+    if (!window_) return;
+    SyncClipboardListener();
+    if (positionChanged) PositionOnMonitor(PreferredMonitor());
+    else Render();
+}
+
+void IslandWindow::SyncClipboardListener()
+{
+    if (!window_) return;
+    if (preferences_.clipboardLinks && !clipboardListening_)
+    {
+        clipboardListening_ = AddClipboardFormatListener(window_) != FALSE;
+        if (!clipboardListening_) logger_.Write("Clipboard change listener unavailable");
+    }
+    else if (!preferences_.clipboardLinks && clipboardListening_)
+    {
+        RemoveClipboardFormatListener(window_);
+        clipboardListening_ = false;
+    }
 }
 
 void IslandWindow::Render()
@@ -125,11 +180,12 @@ void IslandWindow::SyncMediaInteraction()
         return;
     }
     const auto& media = view_.Media();
-    std::wstring tip = media.app ? media.app->name : (media.source.empty() ? L"播放器" : media.source);
+    std::wstring tip = media.app ? media.app->name : (media.source.empty() ? UiText(L"播放器", L"Player") : media.source);
     const auto current = std::find_if(media.sessions.begin(), media.sessions.end(), [&](const MediaSessionChoice& choice) { return choice.id == media.sessionId; });
     if (media.sessions.size() > 1 && current != media.sessions.end())
-        tip += L" · " + std::to_wstring(current - media.sessions.begin() + 1) + L"/" + std::to_wstring(media.sessions.size()) + L"\n点击切换播放器";
-    else tip += L"\n当前只有一个播放器";
+        tip += L" · " + std::to_wstring(current - media.sessions.begin() + 1) + L"/" + std::to_wstring(media.sessions.size()) +
+            UiText(L"\n点击切换播放器", L"\nClick to switch players");
+    else tip += UiText(L"\n当前只有一个播放器", L"\nOne player available");
     if (!media.appError.empty()) tip += L"\n" + media.appError;
     const auto button = view_.MediaSourceButton(); const UINT dpi = GetDpiForWindow(window_);
     tool.rect = {ToPixels(button.left, dpi), ToPixels(button.top, dpi), ToPixels(button.right, dpi), ToPixels(button.bottom, dpi)};
@@ -168,35 +224,150 @@ void IslandWindow::RethrowWindowError() const
     if (error_) std::rethrow_exception(error_);
 }
 
+HMONITOR IslandWindow::PreferredMonitor() const
+{
+    if (!preferences_.monitorDevice.empty())
+    {
+        std::vector<HMONITOR> monitors;
+        CheckWin32(EnumDisplayMonitors(nullptr, nullptr, CollectMonitor, reinterpret_cast<LPARAM>(&monitors)), "EnumDisplayMonitors");
+        for (const auto monitor : monitors)
+            if (_wcsicmp(MonitorInfo(monitor).szDevice, preferences_.monitorDevice.c_str()) == 0) return monitor;
+    }
+    return MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY);
+}
+
+void IslandWindow::ResizeRendererIfNeeded()
+{
+    RECT client{}; CheckWin32(GetClientRect(window_, &client), "GetClientRect");
+    const SIZE size{client.right - client.left, client.bottom - client.top};
+    const UINT dpi = GetDpiForWindow(window_);
+    if (!dpi) ThrowLastError("GetDpiForWindow");
+    if (size.cx == rendererSize_.cx && size.cy == rendererSize_.cy && dpi == rendererDpi_) return;
+    renderer_.Resize(size, dpi);
+    rendererSize_ = size;
+    rendererDpi_ = dpi;
+}
+
 void IslandWindow::PositionOnMonitor(HMONITOR monitor)
 {
     if (positioning_ || !window_) return;
-    MONITORINFO info{ sizeof(MONITORINFO) };
-    if (!monitor || !GetMonitorInfoW(monitor, &info))
+    if (!monitor) monitor = PreferredMonitor();
+    MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&info)))
     {
         monitor = MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY);
-        CheckWin32(GetMonitorInfoW(monitor, &info), "GetMonitorInfoW");
+        info = MonitorInfo(monitor);
     }
-    monitor_ = monitor;
-    // 先把窗口移到目标屏幕，GetDpiForWindow 随即获得该屏幕 DPI。
-    // WM_DPICHANGED 在 SetWindowPos 内同步触发，防止嵌套定位。
     positioning_ = true;
     try
     {
-        CheckWin32(SetWindowPos(window_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
-            0, 0, SWP_NOSIZE | SWP_NOACTIVATE), "SetWindowPos (monitor)");
+        // Moving to another monitor updates GetDpiForWindow synchronously.
+        // Ignore its nested WM_DPICHANGED until this layout is complete.
+        if (monitor_ != monitor)
+            CheckWin32(SetWindowPos(window_, HWND_TOPMOST, info.rcMonitor.left, info.rcMonitor.top,
+                0, 0, SWP_NOSIZE | SWP_NOACTIVATE), "SetWindowPos (monitor)");
+        monitor_ = monitor;
         const UINT dpi = GetDpiForWindow(window_);
         if (!dpi) ThrowLastError("GetDpiForWindow");
         const auto& layout = view_.Layout();
-        const SIZE size{ ToPixels(layout.hostWidth, dpi), ToPixels(layout.hostHeight, dpi) };
-        const LONG x = info.rcMonitor.left + (info.rcMonitor.right - info.rcMonitor.left - size.cx) / 2;
-        const LONG y = info.rcMonitor.top + ToPixels(layout.topGap, dpi);
-        CheckWin32(SetWindowPos(window_, HWND_TOPMOST, x, y, size.cx, size.cy, SWP_NOACTIVATE), "SetWindowPos (layout)");
-        renderer_.Resize(size, dpi);
+        const SIZE size{ToPixels(layout.hostWidth, dpi), ToPixels(layout.hostHeight, dpi)};
+        LONG x = info.rcMonitor.left + (info.rcMonitor.right - info.rcMonitor.left - size.cx) / 2 + ToPixels(preferences_.layout.offsetX, dpi);
+        LONG y = info.rcMonitor.top + ToPixels(layout.topGap + preferences_.layout.offsetY, dpi);
+        ClampIslandPosition(x, y, info.rcWork, view_, dpi);
+        RECT current{}; CheckWin32(GetWindowRect(window_, &current), "GetWindowRect");
+        if (current.left != x || current.top != y || current.right - current.left != size.cx || current.bottom - current.top != size.cy)
+            CheckWin32(SetWindowPos(window_, HWND_TOPMOST, x, y, size.cx, size.cy, SWP_NOACTIVATE), "SetWindowPos (layout)");
+        ResizeRendererIfNeeded();
         Render();
         positioning_ = false;
     }
     catch (...) { positioning_ = false; throw; }
+}
+
+void IslandWindow::BeginRightPress()
+{
+    if (!preferences_.rightDrag || !Visible()) return;
+    POINT point{}; CheckWin32(GetCursorPos(&point), "GetCursorPos");
+    POINT client = point; CheckWin32(ScreenToClient(window_, &client), "ScreenToClient");
+    if (!renderer_.HitTest(client)) return;
+    RECT host{}; CheckWin32(GetWindowRect(window_, &host), "GetWindowRect");
+    const float scale = static_cast<float>(GetDpiForWindow(window_)) / 96;
+    rightButtonDown_ = true;
+    rightDragging_ = rightPressCancelled_ = false;
+    rightPressTime_ = GetTickCount64();
+    rightPressPoint_ = point;
+    dragAnchorX_ = (point.x - host.left) / scale;
+    dragAnchorY_ = (point.y - host.top) / scale;
+    SetCapture(window_);
+    if (!SetTimer(window_, RightHoldTimer, RightHoldMilliseconds, nullptr))
+    {
+        const DWORD error = GetLastError();
+        FinishRightPress(true);
+        SetLastError(error);
+        ThrowLastError("SetTimer (right hold)");
+    }
+}
+
+void IslandWindow::UpdateRightDrag()
+{
+    if (!rightButtonDown_ || !window_) return;
+    POINT point{}; CheckWin32(GetCursorPos(&point), "GetCursorPos");
+    if (!rightDragging_)
+    {
+        if (GetTickCount64() - rightPressTime_ < RightHoldMilliseconds) return;
+        const UINT dpi = GetDpiForWindow(window_);
+        if (std::abs(point.x - rightPressPoint_.x) < GetSystemMetricsForDpi(SM_CXDRAG, dpi) &&
+            std::abs(point.y - rightPressPoint_.y) < GetSystemMetricsForDpi(SM_CYDRAG, dpi)) return;
+        rightDragging_ = true;
+        KillTimer(window_, RightHoldTimer);
+        BeginMenu(); // Pause idle timeout and outside-click tracking only while moving.
+    }
+    if (positioning_) return;
+    positioning_ = true;
+    try
+    {
+        const UINT previousDpi = GetDpiForWindow(window_);
+        LONG x = point.x - ToPixels(dragAnchorX_, previousDpi);
+        LONG y = point.y - ToPixels(dragAnchorY_, previousDpi);
+        CheckWin32(SetWindowPos(window_, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE), "Move island");
+        const UINT dpi = GetDpiForWindow(window_);
+        const auto& layout = view_.Layout();
+        const SIZE size{ToPixels(layout.hostWidth, dpi), ToPixels(layout.hostHeight, dpi)};
+        x = point.x - ToPixels(dragAnchorX_, dpi);
+        y = point.y - ToPixels(dragAnchorY_, dpi);
+        monitor_ = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        ClampIslandPosition(x, y, MonitorInfo(monitor_).rcWork, view_, dpi);
+        CheckWin32(SetWindowPos(window_, HWND_TOPMOST, x, y, size.cx, size.cy, SWP_NOACTIVATE), "Move island (layout)");
+        ResizeRendererIfNeeded();
+        Render();
+        positioning_ = false;
+    }
+    catch (...) { positioning_ = false; throw; }
+}
+
+bool IslandWindow::FinishRightPress(bool cancelled)
+{
+    if (!rightButtonDown_) return false;
+    const bool moved = rightDragging_;
+    rightButtonDown_ = rightDragging_ = false;
+    rightPressCancelled_ = cancelled;
+    KillTimer(window_, RightHoldTimer);
+    if (GetCapture() == window_) ReleaseCapture();
+    if (moved && cancelled) PositionOnMonitor(PreferredMonitor());
+    if (moved) EndMenu();
+    if (moved && !cancelled)
+    {
+        RECT host{}; CheckWin32(GetWindowRect(window_, &host), "GetWindowRect");
+        const auto info = MonitorInfo(monitor_);
+        const float scale = static_cast<float>(GetDpiForWindow(window_)) / 96;
+        preferences_.layout.offsetX = (host.left - (info.rcMonitor.left +
+            (info.rcMonitor.right - info.rcMonitor.left - (host.right - host.left)) / 2)) / scale;
+        preferences_.layout.offsetY = (host.top - info.rcMonitor.top) / scale - view_.Layout().topGap;
+        preferences_.monitorDevice = info.szDevice;
+        if (positionHandler_) positionHandler_(preferences_.layout.offsetX, preferences_.layout.offsetY, preferences_.monitorDevice);
+    }
+    SyncPointer();
+    return moved;
 }
 
 void IslandWindow::ResetPointer()
@@ -208,6 +379,8 @@ void IslandWindow::ResetPointer()
     }
     pointerTracking_ = false;
     lineClick_ = false;
+    pressAction_ = ViewAction::None;
+    pressNoticeRevision_ = 0;
     if (pointerInside_)
     {
         pointerInside_ = false;
@@ -286,6 +459,7 @@ void IslandWindow::SetFullscreenHidden(bool value)
 void IslandWindow::ApplyVisibility()
 {
     if (!window_ || visibility_.ShouldShow() == Visible()) return;
+    if (!visibility_.ShouldShow() && rightButtonDown_) FinishRightPress(true);
     ResetPointer();
     if (visibility_.ShouldShow())
     {
@@ -318,95 +492,17 @@ BOOL CALLBACK IslandWindow::CollectMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM
     catch (...) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
 }
 
-void IslandWindow::ShowContextMenu(POINT point)
-{
-    Menu menu(CreatePopupMenu());
-    if (!menu) ThrowLastError("CreatePopupMenu");
-    const auto add = [&](UINT flags, UINT command, const wchar_t* text)
-    {
-        CheckWin32(AppendMenuW(menu.get(), flags, command, text), "AppendMenuW");
-    };
-    add(MF_STRING, Center, L"重新居中");
-    add(MF_STRING, NextMonitor, L"移到下一显示器");
-    add(MF_STRING | ((visibilityHotkey_ || tray_.Registered()) ? 0 : MF_GRAYED), Hide, L"隐藏\tCtrl+Alt+I");
-    add(MF_SEPARATOR, 0, nullptr);
-    add(MF_STRING, About, L"关于 WinHalo");
-    add(MF_STRING, Exit, L"退出\tCtrl+Alt+Q");
-    add(MF_SEPARATOR, 0, nullptr);
-    add(MF_STRING | ((view_.Expanded() || view_.Media().available) ? 0 : MF_GRAYED),
-        TogglePanel, view_.Expanded() ? L"收起" : L"展开播放器");
-    add(MF_STRING, Settings, L"设置");
-#ifdef _DEBUG
-    add(MF_SEPARATOR, 0, nullptr);
-    add(MF_STRING, Performance, L"性能数据");
-    add(MF_STRING | (view_.Media().available ? 0 : MF_GRAYED), StressTest, L"连续展开 / 收起测试");
-    add(MF_STRING | (view_.Media().available ? 0 : MF_GRAYED), DebugSize, L"切换测试尺寸");
-    add(MF_STRING, RecreateDevice, L"重建图形设备");
-#endif
-    // 菜单自身接受输入；窗口仍保留 NOACTIVATE，不主动抢占其他应用焦点。
-    BeginMenu();
-    UINT command = 0;
-    try
-    {
-        command = static_cast<UINT>(TrackPopupMenuEx(menu.get(),
-            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, window_, nullptr));
-    }
-    catch (...) { EndMenu(); throw; }
-    EndMenu();
-    switch (command)
-    {
-    case TogglePanel:
-        if ((view_.Expanded() || view_.Media().available) && handler_) handler_(WindowEvent::TogglePanel);
-        break;
-    case Settings: if (handler_) handler_(WindowEvent::Settings); break;
-    case StressTest: if (view_.Media().available && handler_) handler_(WindowEvent::StressTest); break;
-    case DebugSize: if (view_.Media().available && handler_) handler_(WindowEvent::DebugSize); break;
-    case RecreateDevice: if (handler_) handler_(WindowEvent::RecreateDevice); break;
-    case Performance:
-        if (diagnostics_) MessageBoxW(window_, diagnostics_().c_str(), L"WinHalo 性能数据", MB_OK);
-        break;
-    case Center:
-        PositionOnMonitor(monitor_);
-        if (handler_) handler_(WindowEvent::DesktopChanged);
-        break;
-    case NextMonitor:
-    {
-        std::vector<HMONITOR> monitors;
-        CheckWin32(EnumDisplayMonitors(nullptr, nullptr, CollectMonitor, reinterpret_cast<LPARAM>(&monitors)), "EnumDisplayMonitors");
-        if (!monitors.empty())
-        {
-            auto next = std::find(monitors.begin(), monitors.end(), monitor_);
-            if (next == monitors.end() || ++next == monitors.end()) next = monitors.begin();
-            ResetPointer();
-            PositionOnMonitor(*next);
-            if (handler_) handler_(WindowEvent::DesktopChanged);
-        }
-        break;
-    }
-    case Hide: if (visibilityHotkey_ || tray_.Registered()) ToggleVisible(); break;
-    case About:
-        MessageBoxW(window_, L"WinHalo\n原生 Windows 灵动岛\n\n"
-            L"触碰顶部横线唤出胶囊。\n"
-            L"无媒体时显示时间；有媒体时单击胶囊展开播放器。\n"
-            L"移开鼠标 5 秒后胶囊收回横线。\n"
-            L"在设置中调整动画速度或减少动态效果。",
-            L"关于 WinHalo", MB_OK | MB_ICONINFORMATION);
-        break;
-    case Exit: CheckWin32(DestroyWindow(window_), "DestroyWindow"); break;
-    default: break; // 用户取消菜单。
-    }
-}
-
 void IslandWindow::ShowTrayMenu(POINT point)
 {
     Menu menu(CreatePopupMenu());
     if (!menu) ThrowLastError("CreatePopupMenu (tray)");
-    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayToggle, Visible() ? L"隐藏灵动岛" : L"显示灵动岛"), "AppendMenuW");
+    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayToggle, Visible() ?
+        UiText(L"隐藏灵动岛", L"Hide island") : UiText(L"显示灵动岛", L"Show island")), "AppendMenuW");
     CheckWin32(AppendMenuW(menu.get(), MF_STRING | (view_.Media().available ? 0 : MF_GRAYED),
-        TrayExpand, L"展开播放器"), "AppendMenuW");
-    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TraySettings, L"设置"), "AppendMenuW");
+        TrayExpand, UiText(L"展开播放器", L"Open player")), "AppendMenuW");
+    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TraySettings, UiText(L"设置", L"Settings")), "AppendMenuW");
     CheckWin32(AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr), "AppendMenuW");
-    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayExit, L"退出"), "AppendMenuW");
+    CheckWin32(AppendMenuW(menu.get(), MF_STRING, TrayExit, UiText(L"退出", L"Exit")), "AppendMenuW");
     UINT command = 0;
     {
         // A hidden NOACTIVATE island cannot be the foreground menu owner.
@@ -438,7 +534,6 @@ void IslandWindow::ShowTrayMenu(POINT point)
     case TrayToggle: ToggleVisible(); break;
     case TrayExpand: ShowFromTray(true); break;
     case TraySettings:
-        EnsureVisible();
         if (handler_) handler_(WindowEvent::Settings);
         break;
     case TrayExit: CheckWin32(DestroyWindow(window_), "DestroyWindow"); break;
@@ -513,6 +608,9 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case ServiceMessage:
         if (serviceHandler_) serviceHandler_();
         return 0;
+    case WM_CLIPBOARDUPDATE:
+        if (clipboardListening_ && preferences_.clipboardLinks && clipboardHandler_) clipboardHandler_();
+        return 0;
     case TrayIcon::CallbackMessage:
         if (HIWORD(lParam) != TrayIcon::Identifier) return 0;
         switch (LOWORD(lParam))
@@ -554,6 +652,7 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
         return MA_NOACTIVATE;
     }
     case WM_MOUSEMOVE:
+        if (rightButtonDown_) UpdateRightDrag();
         SyncPointer();
         return 0;
     case WM_MOUSELEAVE:
@@ -563,31 +662,76 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
         SyncPointer(false);
         return 0;
     case WM_LBUTTONDOWN:
+    {
         // A click that starts on the line only reveals the capsule. A later
         // click after hover has revealed it follows the normal expansion path.
         lineClick_ = view_.Line() || view_.Frame().height < 18.0f;
+        const float scale = static_cast<float>(GetDpiForWindow(window_)) / 96;
+        pressAction_ = view_.ActionAt(static_cast<float>(GET_X_LPARAM(lParam)) / scale,
+            static_cast<float>(GET_Y_LPARAM(lParam)) / scale);
+        pressNoticeRevision_ = view_.NoticeRevision();
         return 0;
+    }
     case WM_LBUTTONUP:
     {
         const UINT dpi = GetDpiForWindow(window_);
         const float scale = static_cast<float>(dpi) / 96;
         clickAction_ = lineClick_ ? ViewAction::RevealCapsule : view_.ActionAt(
             static_cast<float>(GET_X_LPARAM(lParam)) / scale, static_cast<float>(GET_Y_LPARAM(lParam)) / scale);
+        // A clipboard update may replace the island while a mouse button is
+        // held. Opening a link requires a complete click on that same notice.
+        if (clickAction_ == ViewAction::OpenLink && (pressAction_ != ViewAction::OpenLink ||
+            pressNoticeRevision_ != view_.NoticeRevision())) clickAction_ = ViewAction::None;
         lineClick_ = false;
+        pressAction_ = ViewAction::None;
+        pressNoticeRevision_ = 0;
         if (handler_) handler_(WindowEvent::Click);
+        return 0;
+    }
+    case WM_RBUTTONDOWN:
+        rightPressCancelled_ = false;
+        BeginRightPress();
+        return 0;
+    case WM_RBUTTONUP:
+    {
+        const bool cancelled = rightPressCancelled_;
+        const bool moved = FinishRightPress(false);
+        if (moved || cancelled) return 0;
+        // DefWindowProc produces WM_CONTEXTMENU for a short right click.
+        return DefWindowProcW(window_, message, wParam, lParam);
+    }
+    case WM_TIMER:
+        if (wParam == RightHoldTimer)
+        {
+            KillTimer(window_, RightHoldTimer);
+            UpdateRightDrag();
+            return 0;
+        }
+        return DefWindowProcW(window_, message, wParam, lParam);
+    case WM_CANCELMODE:
+        FinishRightPress(true);
+        return DefWindowProcW(window_, message, wParam, lParam);
+    case WM_CAPTURECHANGED:
+        if (rightButtonDown_ && reinterpret_cast<HWND>(lParam) != window_) FinishRightPress(true);
+        return 0;
+    case WM_MOUSEWHEEL:
+    {
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        CheckWin32(ScreenToClient(window_, &point), "ScreenToClient");
+        if (!preferences_.systemControls || !Visible() || !renderer_.HitTest(point))
+            return DefWindowProcW(window_, message, wParam, lParam);
+        const bool shift = (GET_KEYSTATE_WPARAM(wParam) & MK_SHIFT) != 0;
+        if (shift != wheelShift_) wheelRemainder_ = 0;
+        wheelShift_ = shift;
+        wheelRemainder_ += GET_WHEEL_DELTA_WPARAM(wParam);
+        const int steps = wheelRemainder_ / WHEEL_DELTA;
+        wheelRemainder_ %= WHEEL_DELTA;
+        if (steps && wheelHandler_) wheelHandler_(steps, shift);
         return 0;
     }
     case WM_CONTEXTMENU:
     {
-        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        if (point.x == -1 && point.y == -1)
-        {
-            const auto& layout = view_.Layout();
-            const UINT dpi = GetDpiForWindow(window_);
-            point = { ToPixels(layout.hostWidth / 2, dpi), ToPixels(layout.insetTop + layout.height, dpi) };
-            CheckWin32(ClientToScreen(window_, &point), "ClientToScreen");
-        }
-        ShowContextMenu(point);
+        if (!rightDragging_ && handler_) handler_(WindowEvent::Settings);
         return 0;
     }
     case WM_HOTKEY:
@@ -598,17 +742,16 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DPICHANGED:
         if (!positioning_)
         {
-            const auto* suggested = reinterpret_cast<const RECT*>(lParam);
-            PositionOnMonitor(MonitorFromRect(suggested, MONITOR_DEFAULTTONEAREST));
+            PositionOnMonitor(PreferredMonitor());
             if (handler_) handler_(WindowEvent::DesktopChanged);
         }
         return 0;
     case WM_DISPLAYCHANGE:
-        PositionOnMonitor(MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY));
+        PositionOnMonitor(PreferredMonitor());
         if (handler_) handler_(WindowEvent::DesktopChanged);
         return 0;
     case WM_SETTINGCHANGE:
-        if (!positioning_) PositionOnMonitor(monitor_);
+        if (!positioning_ && !rightDragging_) PositionOnMonitor(PreferredMonitor());
         if (handler_) handler_(WindowEvent::DesktopChanged);
         return 0;
     case WM_ERASEBKGND: return 1;
@@ -621,6 +764,9 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
     }
     case WM_CLOSE: CheckWin32(DestroyWindow(window_), "DestroyWindow"); return 0;
     case WM_DESTROY:
+        KillTimer(window_, RightHoldTimer);
+        if (clipboardListening_) RemoveClipboardFormatListener(window_);
+        clipboardListening_ = false;
         backdrop_.Hide();
         tray_.Remove();
         if (visibilityHotkey_) UnregisterHotKey(window_, VisibilityHotkey);
