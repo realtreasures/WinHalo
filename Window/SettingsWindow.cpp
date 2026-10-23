@@ -45,9 +45,10 @@ enum class Field
     CompactScale, ExpandedScale, Width, Height, ExpandedWidth, ExpandedHeight,
     OffsetX, OffsetY, FontSize, LineWidth,
     AutoHideIdle, AutoHideFullscreen, RightDrag, Notifications, SystemControls, ClipboardLinks, Privacy,
-    Glass, ReducedMotion, SpringSpeed
+    Glass, ReducedMotion, SpringSpeed,
+    ChatNotifications, ChatQQ, ChatWeChat, ChatShowBody, ChatDuration, ChatAuthorize, ChatTest
 };
-enum class Kind { Toggle, Number, Language, Monitor };
+enum class Kind { Toggle, Number, Language, Monitor, Action };
 
 struct Row
 {
@@ -185,6 +186,7 @@ struct SettingsWindow::Impl
     SettingsStatus status;
     ChangeHandler change;
     StartupHandler startup;
+    std::function<void()> chatAuthorize, chatTest;
     std::vector<Row> rows;
     std::vector<Card> cards;
     std::vector<Display> displays;
@@ -368,9 +370,11 @@ struct SettingsWindow::Impl
         registeredContent = registeredContent || contentCreated;
         if (!contentCreated && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) ThrowLastError("Register settings content");
     }
-    void Show(const Configuration& value, const SettingsStatus& current, ChangeHandler changed, StartupHandler started)
+    void Show(const Configuration& value, const SettingsStatus& current, ChangeHandler changed, StartupHandler started,
+        std::function<void()> authorize, std::function<void()> test)
     {
         change = std::move(changed); startup = std::move(started);
+        chatAuthorize = std::move(authorize); chatTest = std::move(test);
         Refresh(value, current);
         if (!window)
         {
@@ -415,15 +419,18 @@ struct SettingsWindow::Impl
                 item.layout.compactScale, item.layout.expandedScale, item.layout.offsetX, item.layout.offsetY,
                 item.layout.fontSize, item.layout.lineWidth, item.spring.speed, item.reducedMotion, item.autoHideFullscreen,
                 item.nativeGlass, item.autoHideIdle, item.rightDrag, item.showNotifications, item.systemControls,
-                item.clipboardLinks, item.privacyIndicators, item.monitorDevice, item.language);
+                item.clipboardLinks, item.privacyIndicators, item.monitorDevice, item.language,
+                item.chatNotifications, item.chatQQ, item.chatWeChat, item.chatShowBody, item.chatDurationSeconds);
         };
         Configuration normalized = value;
         NormalizeConfiguration(normalized);
         const bool configurationChanged = values(normalized) != values(configuration);
         const bool statusChanged = std::tie(current.startupEnabled, current.startupAvailable, current.brightnessAvailable,
-            current.privacyAvailable, current.startupError, current.brightnessStatus, current.privacyStatus, current.saveError) !=
+            current.privacyAvailable, current.startupError, current.brightnessStatus, current.privacyStatus, current.saveError,
+            current.chatAccess, current.chatStatus, current.chatRequestInProgress) !=
             std::tie(status.startupEnabled, status.startupAvailable, status.brightnessAvailable,
-                status.privacyAvailable, status.startupError, status.brightnessStatus, status.privacyStatus, status.saveError);
+                status.privacyAvailable, status.startupError, status.brightnessStatus, status.privacyStatus, status.saveError,
+                status.chatAccess, status.chatStatus, status.chatRequestInProgress);
         if (configuration.monitorDevice != normalized.monitorDevice) displaysDirty = true;
         configuration = std::move(normalized);
         status = current;
@@ -482,6 +489,8 @@ struct SettingsWindow::Impl
             row.plus = AddControl(L"BUTTON", L"", BS_OWNERDRAW | BS_NOTIFY, ControlId(field, 2));
             SendMessageW(row.control, EM_SETLIMITTEXT, 24, 0);
         }
+        else if (kind == Kind::Action)
+            row.control = AddControl(L"BUTTON", L"", BS_OWNERDRAW | BS_NOTIFY, ControlId(field));
         else
             row.control = AddControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, ControlId(field));
         rows.push_back(row);
@@ -491,7 +500,7 @@ struct SettingsWindow::Impl
     void CreateRows()
     {
         geometryDirty = true;
-        rows.reserve(24); cards.reserve(8);
+        rows.reserve(32); cards.reserve(8);
         BeginCard();
         AddRow(Field::Startup, Kind::Toggle, L"开机启动", L"Launch at startup", L"登录 Windows 后自动运行 WinHalo", L"Start WinHalo when you sign in to Windows", 76);
         AddRow(Field::Language, Kind::Language, L"界面语言", L"Language", L"立即应用，无需重新启动", L"Applies immediately, no restart needed");
@@ -527,6 +536,15 @@ struct SettingsWindow::Impl
         AddRow(Field::ClipboardLinks, Kind::Toggle, L"剪贴板链接", L"Clipboard links", L"复制网页链接时显示打开入口", L"Offer an open action after copying a web link");
         AddRow(Field::Privacy, Kind::Toggle, L"隐私活动提示", L"Privacy activity indicators", L"显示系统提供的摄像头和麦克风活动", L"Show camera and microphone activity reported by Windows", 88);
         EndCard();
+        BeginCard();
+        AddRow(Field::ChatNotifications, Kind::Toggle, L"聊天消息", L"Chat notifications", L"使用 Windows 通知显示 QQ、微信新消息；默认关闭", L"Show new QQ and WeChat notifications from Windows; off by default", 88);
+        AddRow(Field::ChatQQ, Kind::Toggle, L"QQ 消息", L"QQ messages", L"显示系统通知中的 QQ 新消息", L"Show new QQ messages from Windows notifications");
+        AddRow(Field::ChatWeChat, Kind::Toggle, L"微信消息", L"WeChat messages", L"显示系统通知中的微信新消息", L"Show new WeChat messages from Windows notifications");
+        AddRow(Field::ChatShowBody, Kind::Toggle, L"显示消息正文", L"Show message preview", L"仅显示原通知提供的内容，不保存消息", L"Use the original preview only; message contents are never saved", 88);
+        AddRow(Field::ChatDuration, Kind::Number, L"弹窗持续时间", L"Popup duration", L"2–20 秒；鼠标悬停时暂停计时", L"2–20 seconds; pauses while the pointer is over the popup");
+        AddRow(Field::ChatAuthorize, Kind::Action, L"通知访问权限", L"Notification access", L"", L"", 112);
+        AddRow(Field::ChatTest, Kind::Action, L"测试消息弹窗", L"Test notification popup", L"仅使用示例消息，不读取聊天记录", L"Use a sample message without reading chat history");
+        EndCard();
         resetButton = AddControl(L"BUTTON", L"", BS_OWNERDRAW | BS_NOTIFY, ResetControl);
         UpdateControls(true);
     }
@@ -553,6 +571,7 @@ struct SettingsWindow::Impl
         case Field::FontSize: return configuration.layout.fontSize;
         case Field::LineWidth: return configuration.layout.lineWidth;
         case Field::SpringSpeed: return configuration.spring.speed;
+        case Field::ChatDuration: return configuration.chatDurationSeconds;
         default: return 0;
         }
     }
@@ -573,6 +592,7 @@ struct SettingsWindow::Impl
         case Field::FontSize: configuration.layout.fontSize = result; break;
         case Field::LineWidth: configuration.layout.lineWidth = result; break;
         case Field::SpringSpeed: configuration.spring.speed = value; break;
+        case Field::ChatDuration: configuration.chatDurationSeconds = static_cast<int>(std::clamp(value, 2.0, 20.0)); break;
         default: break;
         }
     }
@@ -590,6 +610,10 @@ struct SettingsWindow::Impl
         case Field::Privacy: return configuration.privacyIndicators;
         case Field::Glass: return configuration.nativeGlass;
         case Field::ReducedMotion: return configuration.reducedMotion;
+        case Field::ChatNotifications: return configuration.chatNotifications;
+        case Field::ChatQQ: return configuration.chatQQ;
+        case Field::ChatWeChat: return configuration.chatWeChat;
+        case Field::ChatShowBody: return configuration.chatShowBody;
         default: return false;
         }
     }
@@ -606,6 +630,10 @@ struct SettingsWindow::Impl
         case Field::Privacy: configuration.privacyIndicators = enabled; break;
         case Field::Glass: configuration.nativeGlass = enabled; break;
         case Field::ReducedMotion: configuration.reducedMotion = enabled; break;
+        case Field::ChatNotifications: configuration.chatNotifications = enabled; break;
+        case Field::ChatQQ: configuration.chatQQ = enabled; break;
+        case Field::ChatWeChat: configuration.chatWeChat = enabled; break;
+        case Field::ChatShowBody: configuration.chatShowBody = enabled; break;
         default: break;
         }
     }
@@ -660,6 +688,18 @@ struct SettingsWindow::Impl
         SendMessageW(row.control, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
         SendMessageW(row.control, CB_SETDROPPEDWIDTH, static_cast<WPARAM>(P(310)), 0);
     }
+    bool ControlAvailable(const Row& row) const noexcept
+    {
+        switch (row.field)
+        {
+        case Field::Startup: return status.startupAvailable;
+        case Field::ChatQQ: case Field::ChatWeChat: case Field::ChatShowBody: case Field::ChatDuration:
+            return configuration.chatNotifications;
+        case Field::ChatAuthorize: return chatAuthorize && !status.chatRequestInProgress;
+        case Field::ChatTest: return chatTest && configuration.chatNotifications;
+        default: return true;
+        }
+    }
     void UpdateControls(bool forceNumbers)
     {
         if (!window) return;
@@ -673,6 +713,9 @@ struct SettingsWindow::Impl
             if (navigation[index]) SetWindowTextW(navigation[index], T(navigationChinese[index], navigationEnglish[index]));
         for (auto& row : rows)
         {
+            const bool available = ControlAvailable(row);
+            for (HWND control : {row.control, row.minus, row.plus})
+                if (control && (IsWindowEnabled(control) != FALSE) != available) EnableWindow(control, available);
             if (accessibility)
             {
                 accessibility->SetHwndPropStr(row.control, static_cast<DWORD>(OBJID_CLIENT), CHILDID_SELF, AccessibleName, Label(row));
@@ -685,8 +728,6 @@ struct SettingsWindow::Impl
                 if (SendMessageW(row.control, BM_GETCHECK, 0, 0) != check) SendMessageW(row.control, BM_SETCHECK, static_cast<WPARAM>(check), 0);
                 // Privacy capability is discovered after enabling its monitor;
                 // an unknown/inactive capability must not prevent opting in.
-                const bool available = row.field != Field::Startup || status.startupAvailable;
-                if ((IsWindowEnabled(row.control) != FALSE) != available) EnableWindow(row.control, available);
                 InvalidateRect(row.control, nullptr, FALSE);
             }
             else if (row.kind == Kind::Number)
@@ -709,7 +750,16 @@ struct SettingsWindow::Impl
                 if (SendMessageW(row.control, CB_GETCURSEL, 0, 0) != selection)
                     SendMessageW(row.control, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
             }
-            else if (displaysDirty || SendMessageW(row.control, CB_GETCOUNT, 0, 0) <= 0) UpdateDisplays(row);
+            else if (row.kind == Kind::Action)
+            {
+                const wchar_t* caption = row.field == Field::ChatTest ? T(L"测试弹窗", L"Test popup") :
+                    status.chatRequestInProgress ? T(L"正在申请…", L"Requesting…") :
+                    status.chatAccess == NotificationAccess::Allowed ? T(L"检查权限", L"Check access") :
+                    T(L"申请授权", L"Grant access");
+                SetWindowTextW(row.control, caption);
+                InvalidateRect(row.control, nullptr, FALSE);
+            }
+            else if (row.kind == Kind::Monitor && (displaysDirty || SendMessageW(row.control, CB_GETCOUNT, 0, 0) <= 0)) UpdateDisplays(row);
         }
         if (resetButton) SetWindowTextW(resetButton, T(L"恢复默认", L"Restore defaults"));
         syncing = previousSync;
@@ -797,6 +847,21 @@ struct SettingsWindow::Impl
         }
         Row* row = FindRow(id);
         if (!row) return;
+        if (!ControlAvailable(*row)) return;
+        if (row->kind == Kind::Action && notification == BN_CLICKED)
+        {
+            callbackError.clear();
+            try
+            {
+                // The handler may synchronously Refresh this window.
+                const auto callback = row->field == Field::ChatAuthorize ? chatAuthorize : chatTest;
+                if (callback) callback();
+            }
+            catch (...) { callbackError = T(L"操作未能完成，请重试。", L"The action could not be completed. Please try again."); }
+            UpdateControls(false);
+            InvalidateRect(window, nullptr, FALSE);
+            return;
+        }
         if (row->kind == Kind::Number)
         {
             if (notification == EN_KILLFOCUS && id == ControlId(row->field)) CommitNumber(*row);
@@ -907,6 +972,8 @@ struct SettingsWindow::Impl
                 contentPositions.push_back({row.control, P(right - 108), P(centerY - 11), P(70), P(24)});
                 contentPositions.push_back({row.plus, P(right - 30), P(centerY - 16), P(30), P(32)});
             }
+            else if (row.kind == Kind::Action)
+                contentPositions.push_back({row.control, P(right - 136), P(centerY - 17), P(136), P(34)});
             else
             {
                 const int width = std::min(238, std::max(165, contentWidth / 3));
@@ -1055,6 +1122,29 @@ struct SettingsWindow::Impl
     }
     std::wstring Hint(const Row& row) const
     {
+        if (row.field == Field::ChatAuthorize)
+        {
+            if (status.chatRequestInProgress)
+                return T(L"等待 Windows 授权结果；请在系统对话框中选择。", L"Waiting for Windows; choose an option in the permission dialog.");
+            if (!status.chatStatus.empty()) return status.chatStatus;
+            switch (status.chatAccess)
+            {
+            case NotificationAccess::Disabled:
+                return T(L"聊天消息尚未启用；读取前需要主动授权。", L"Chat notifications are off. Reading notifications requires your permission.");
+            case NotificationAccess::IdentityRequired:
+                return T(L"需要先安装带应用身份的版本，再申请授权。", L"Install the version with app identity before granting access.");
+            case NotificationAccess::NotRequested:
+                return T(L"尚未授权；点击右侧按钮申请通知访问权限。", L"Access has not been requested. Use the button to grant notification access.");
+            case NotificationAccess::Allowed:
+                return T(L"已获得 Windows 通知访问权限。", L"Windows notification access is allowed.");
+            case NotificationAccess::Denied:
+                return T(L"Windows 已拒绝访问；请在系统设置中允许通知访问。", L"Windows denied access. Allow notification access in Windows Settings.");
+            case NotificationAccess::Unavailable:
+                return T(L"当前 Windows 无法提供通知监听功能。", L"The notification listener is unavailable on this version of Windows.");
+            default:
+                return T(L"通知访问暂不可用，请检查权限后重试。", L"Notification access is unavailable. Check permission and try again.");
+            }
+        }
         if (row.field == Field::Startup && !status.startupError.empty()) return status.startupError;
         if (row.field == Field::Startup && !status.startupAvailable)
             return T(L"无法访问 Windows 开机启动设置", L"Windows startup settings are unavailable");
@@ -1109,13 +1199,15 @@ struct SettingsWindow::Impl
                 const auto& row = rows[index];
                 const int y = row.y - scroll;
                 const int right = contentWidth - 40;
-                const int group = row.kind == Kind::Toggle ? 66 : (row.kind == Kind::Number ? 162 :
+                const int group = row.kind == Kind::Toggle ? 66 : (row.kind == Kind::Number ? 162 : row.kind == Kind::Action ? 152 :
                     std::min(238, std::max(165, contentWidth / 3)) + 16);
                 const int labelRight = right - group;
                 Text(dc, Label(row), R(52, y + 12, labelRight, y + 36), 0, Ink);
                 const auto hint = Hint(row);
                 const bool unavailable = (row.field == Field::Startup && !status.startupAvailable) ||
-                    (row.field == Field::Privacy && !status.privacyAvailable);
+                    (row.field == Field::Privacy && !status.privacyAvailable) ||
+                    (row.field == Field::ChatAuthorize && status.chatAccess != NotificationAccess::Allowed &&
+                        status.chatAccess != NotificationAccess::Disabled && status.chatAccess != NotificationAccess::NotRequested);
                 const COLORREF hintColor = unavailable ? RGB(148, 116, 77) : Muted;
                 Text(dc, hint, R(52, y + 38, labelRight, y + row.height - 9), 1, hintColor,
                     DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
@@ -1179,7 +1271,7 @@ struct SettingsWindow::Impl
                 else if (id == FirstNavigation + 1) Circle(dc, x + size / 2, y, size / 2, ink, stroke);
                 else for (int offset : {-4, 0, 4}) Line(dc, x, y + P(offset), x + size, y + P(offset), ink, stroke);
             }
-            else if (row)
+            else if (row && row->kind == Kind::Number)
             {
                 const float x = (shape.left + shape.right) / 2.0f, y = (shape.top + shape.bottom) / 2.0f;
                 Line(dc, x - P(4), y, x + P(4), y, ink, std::max(1.5f, stroke));
@@ -1191,7 +1283,7 @@ struct SettingsWindow::Impl
                 Outline(dc, focus, nav ? 7 : 6, Accent, std::max(1.5f, dpi / 96.0f));
             }
         });
-        if (nav || !row)
+        if (nav || !row || row->kind == Kind::Action)
         {
             wchar_t caption[128]{}; GetWindowTextW(item.hwndItem, caption, 128);
             RECT text = shape;
@@ -1364,9 +1456,9 @@ struct SettingsWindow::Impl
 SettingsWindow::SettingsWindow(HINSTANCE instance) : impl_(std::make_unique<Impl>(instance)) {}
 SettingsWindow::~SettingsWindow() = default;
 void SettingsWindow::Show(const Configuration& configuration, const SettingsStatus& status,
-    ChangeHandler change, StartupHandler startup)
+    ChangeHandler change, StartupHandler startup, std::function<void()> chatAuthorize, std::function<void()> chatTest)
 {
-    impl_->Show(configuration, status, std::move(change), std::move(startup));
+    impl_->Show(configuration, status, std::move(change), std::move(startup), std::move(chatAuthorize), std::move(chatTest));
 }
 void SettingsWindow::Refresh(const Configuration& configuration, const SettingsStatus& status) { impl_->Refresh(configuration, status); }
 void SettingsWindow::Close() { impl_->Close(); }

@@ -260,9 +260,9 @@ def main():
         scale = dpi / 96
         # The floating island must not cover any pixels in a settings screenshot.
         if u.IsWindowVisible(app): desktop.send(app, 0x312, 1)
-        controls = [(identifier, owned(hwnd)) for identifier in range(1000, 1000 + 23 * 4)
+        controls = [(identifier, owned(hwnd)) for identifier in range(1000, 1000 + 30 * 4)
                     if (hwnd := u.GetDlgItem(content, identifier))]
-        assert len(controls) >= 23, 'Expected native setting controls were not created'
+        assert len(controls) >= 30, 'Expected native setting controls were not created'
         settle()
         baseline_controls = control_state()
         for identifier, value in baseline_controls.items():

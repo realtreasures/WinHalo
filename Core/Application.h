@@ -9,6 +9,9 @@
 #include "../Services/StartupRegistration.h"
 #include "../Services/BehaviorService.h"
 #include "../Window/SettingsWindow.h"
+#include "../Services/NotificationService.h"
+#include "../Services/NotificationPolicy.h"
+#include "../Window/ChatNotificationWindow.h"
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -16,6 +19,7 @@
 namespace winisland
 {
 struct ServiceMailbox;
+struct ChatAuthorization;
 class Application
 {
 public:
@@ -36,6 +40,14 @@ private:
     void RefreshSettings();
     void OnWheel(int steps, bool brightness);
     void OnClipboard();
+    void RequestChatAccess();
+    void TestChatNotification();
+    void RefreshChatStatus();
+    void RefreshChatWindow();
+    void PositionChatWindow();
+    RECT ChatAnchor() const;
+    void DisplayChat(ChatNotification notification);
+    void CancelChatAuthorization() noexcept;
     DWORD ContentTimeout() const noexcept;
     std::wstring Diagnostics() const;
     // 服务先停止，再销毁窗口；日志最后释放。
@@ -46,11 +58,20 @@ private:
     CompositionRenderer renderer_;
     IslandWindow window_;
     SettingsWindow settings_;
+    ChatNotificationWindow chatWindow_;
     SettingsStatus settingsStatus_;
     std::shared_ptr<ServiceMailbox> mailbox_;
     MediaService mediaService_;
     VolumeService volumeService_;
     BehaviorService behaviorService_;
+    NotificationService notificationService_;
+    NotificationQueue notificationQueue_;
+    NotificationStatus notificationStatus_;
+    std::optional<ChatNotification> activeChat_;
+    std::shared_ptr<ChatAuthorization> chatAuthorization_;
+    bool sessionLocked_ = false;
+    bool chatFullscreen_ = false;
+    bool sessionNotifications_ = false;
     BehaviorSnapshot behavior_;
     std::wstring pendingLink_, lastLink_;
     bool brightnessRequested_ = false;

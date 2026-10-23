@@ -139,7 +139,7 @@
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>D3D11.lib;DXGI.lib;D2D1.lib;DWrite.lib;DComp.lib;Dwmapi.lib;CoreMessaging.lib;WindowsApp.lib;WindowsCodecs.lib;RuntimeObject.lib;User32.lib;Gdi32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;Comctl32.lib;Dxva2.lib;Wbemuuid.lib;OleAut32.lib;Mfplat.lib;Mfuuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>D3D11.lib;DXGI.lib;D2D1.lib;DWrite.lib;DComp.lib;Dwmapi.lib;CoreMessaging.lib;WindowsApp.lib;WindowsCodecs.lib;RuntimeObject.lib;User32.lib;Gdi32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;Comctl32.lib;Dxva2.lib;Wbemuuid.lib;OleAut32.lib;Mfplat.lib;Mfuuid.lib;Wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableUAC>false</EnableUAC>
     </Link>
     <Manifest>
@@ -151,6 +151,10 @@
     <ClInclude Include="Core\Configuration.h" />
     <ClInclude Include="Window\SettingsWindow.h" />
     <ClInclude Include="Window\SettingsPainter.h" />
+    <ClInclude Include="Window\ChatNotificationWindow.h" />
+    <ClInclude Include="Services\NotificationTypes.h" />
+    <ClInclude Include="Services\NotificationPolicy.h" />
+    <ClInclude Include="Services\NotificationService.h" />
     <ClInclude Include="Services\BehaviorService.h" />
     <ClInclude Include="Utils\Localization.h" />
     <ClInclude Include="Animation\Spring.h" />
@@ -190,6 +194,9 @@
     <ClCompile Include="Core\Configuration.cpp" />
     <ClCompile Include="Window\SettingsWindow.cpp" />
     <ClCompile Include="Window\SettingsPainter.cpp" />
+    <ClCompile Include="Window\ChatNotificationWindow.cpp" />
+    <ClCompile Include="Services\NotificationPolicy.cpp" />
+    <ClCompile Include="Services\NotificationService.cpp" />
     <ClCompile Include="Services\BehaviorService.cpp" />
     <ClCompile Include="Animation\Spring.cpp" />
     <ClCompile Include="Animation\AnimationManager.cpp" />

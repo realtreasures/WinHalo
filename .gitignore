@@ -7,4 +7,5 @@ Release/
 *.VC.db
 *.VC.opendb
 artifacts/
+dist/
 __pycache__/

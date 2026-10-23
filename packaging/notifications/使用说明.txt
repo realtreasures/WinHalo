@@ -1,0 +1,43 @@
+WinHalo QQ / 微信消息测试版
+
+1. 将压缩包完整解压到固定目录，例如 D:\Apps\WinHalo。注册后请勿移动目录。
+2. 关闭正在运行的旧 WinHalo，在此目录打开 Windows PowerShell。
+3. 先核对签名证书指纹：__CERTIFICATE_THUMBPRINT__。
+4. 开发测试包的签名证书仅适用于测试。MSIX 需要本机（LocalMachine）的 TrustedPeople 信任。
+   2026-10-23 本机实测：只加入当前用户的 TrustedPeople 后仍报 0x800B0109，组件未安装成功。
+   这是整台电脑范围的发布者信任变更，需要管理员权限和你的明确同意；不会自动提权。
+   请先核对第 3 步指纹。管理员在此目录中打开已提升的 PowerShell，执行：
+   Import-Certificate -FilePath .\WinHalo.Signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+   只导入本包公钥证书，不加入 Root，不导入私钥。
+   然后回到要使用 WinHalo 的那个账户，以普通 PowerShell 执行：
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Notifications.ps1
+   身份包只为执行安装的账户注册；如果管理员是另一个账户，不能替代这一步。
+   若是同一账户的管理员提升，也可用以下命令一次完成明确的机器信任与当前账户注册：
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Notifications.ps1 -TrustMachineDevelopmentCertificate
+   此开关要求终端已经提升，脚本不会弹出 UAC。机器证书已受信任或正式签名已受信任时无需信任开关。
+   旧开关 -TrustDevelopmentCertificate 仍只处理 CurrentUser；缺少机器信任时会在导入前停止。
+5. 双击 WinHalo.exe，右击胶囊打开设置，在“聊天消息”中启用功能并点击申请通知访问。
+   读取权限由 Windows 单独询问，安装不会代替你授权，也不会自动启用开机启动。
+6. 确保 QQ / 微信消息会进入 Windows 通知中心，再让另一账号发一条新消息。
+   原通知不含正文时只能显示“收到一条新消息”；不读取聊天数据库或历史消息。
+
+卡片显示 5 秒（可在设置中调整），悬停暂停倒计时；点击打开对应应用，× 只关卡片。
+音乐控件继续工作。启动时不补弹旧消息，全屏、锁屏、手动隐藏时不展示过期队列。
+消息仅在内存中处理，不写入配置或日志。拒绝或撤销权限后，聊天消息不再读取。
+可先用“测试弹窗”查看样式；模拟卡片不代表真实 QQ / 微信接入已经授权或验证成功。
+
+只运行 WinHalo.exe 仍可使用胶囊、音乐和基础设置，但没有注册身份时无法监听系统消息。
+最低身份包平台为 Windows 10 2004 / build 19041，当前程序为 x64；Windows 10 需额外实机验证。
+
+卸载身份包：先退出 WinHalo，然后执行：
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-Notifications.ps1
+如还要移除当前用户的开发公钥信任，显式添加 -RemoveDevelopmentCertificate。
+如还要移除此包证书在整台电脑的信任，用已提升的 PowerShell 显式添加
+   -RemoveMachineDevelopmentCertificate
+此开关只删本包指纹匹配的 LocalMachine\TrustedPeople 证书，不会删除其他证书或根证书。
+普通卸载不会移除机器证书；机器证书移除会影响这台电脑上其他使用同一测试签名的账户。
+若管理员是另一账户，应先由使用者普通卸载，再让管理员仅删除已核对指纹的机器证书。
+卸载保留程序和 %LOCALAPPDATA%\WinHalo 个人设置，不会删除 QQ / 微信通知。
+移动目录或更换同版本测试包：先卸载旧身份，再从新目录安装；不要覆盖运行中的程序。
+
+这个版本未替你申请真实通知访问，也未在本机读取或验证真实 QQ / 微信消息。

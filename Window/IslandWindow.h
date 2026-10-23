@@ -33,6 +33,7 @@ public:
     void SetPositionChangedHandler(std::function<void(float, float, const std::wstring&)> callback) { positionHandler_ = std::move(callback); }
     void SetWheelHandler(std::function<void(int, bool)> callback) { wheelHandler_ = std::move(callback); }
     void SetClipboardHandler(std::function<void()> callback) { clipboardHandler_ = std::move(callback); }
+    void SetSessionLockHandler(std::function<void(bool)> callback) { sessionLockHandler_ = std::move(callback); }
     void ApplyPreferences(const Configuration& configuration);
     bool Visible() const noexcept { return window_ && IsWindowVisible(window_); }
     void EnsureVisible();
@@ -72,6 +73,7 @@ private:
     std::function<void(float, float, const std::wstring&)> positionHandler_;
     std::function<void(int, bool)> wheelHandler_;
     std::function<void()> clipboardHandler_;
+    std::function<void(bool)> sessionLockHandler_;
     Configuration preferences_;
     bool preferencesApplied_ = false;
     bool clipboardListening_ = false;

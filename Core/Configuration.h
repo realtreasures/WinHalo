@@ -18,6 +18,11 @@ struct Configuration
     bool systemControls = true;
     bool clipboardLinks = false;
     bool privacyIndicators = false;
+    bool chatNotifications = false;
+    bool chatQQ = true;
+    bool chatWeChat = true;
+    bool chatShowBody = true;
+    int chatDurationSeconds = 5;
     std::wstring monitorDevice;
     std::wstring language = L"system";
 };

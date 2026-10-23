@@ -30,6 +30,18 @@ void TestSettings()
     SetEnvironmentVariableW(L"WINHALO_DATA_DIR", folder.c_str());
     Logger logger;
     ConfigurationStore store(logger);
+    const auto expectChatDefaults = [](const Configuration& config) {
+        Expect(!config.chatNotifications && config.chatQQ && config.chatWeChat && config.chatShowBody &&
+            config.chatDurationSeconds == 5, "Chat notification defaults must remain opt-in");
+    };
+    expectChatDefaults(store.Load());
+    for (const int version : {1, 2, 3})
+    {
+        std::ofstream(folder / L"settings.json") << "{\"version\":" << version << ",\"width\":208}";
+        const auto legacy = store.Load();
+        expectChatDefaults(legacy);
+        Expect(legacy.layout.width == 208, "Legacy settings were not loaded");
+    }
     Configuration c;
     c.layout.compactScale = .5f; c.layout.expandedScale = 2;
     c.layout.expandedWidth = 900; c.layout.expandedHeight = 600;
@@ -37,6 +49,8 @@ void TestSettings()
     c.layout.fontSize = 19; c.monitorDevice = L"\\\\.\\DISPLAY2";
     c.language = L"en-US"; c.autoHideIdle = false; c.clipboardLinks = true;
     c.privacyIndicators = true; c.rightDrag = false; c.systemControls = false; c.showNotifications = false;
+    c.chatNotifications = true; c.chatQQ = false; c.chatWeChat = true;
+    c.chatShowBody = false; c.chatDurationSeconds = 17;
     NormalizeConfiguration(c);
     Expect(c.layout.hostWidth >= 1860 && c.layout.hostHeight >= 1264, "Scaled player does not fit its fixed host");
     Expect(store.Save(c), "Settings save failed");
@@ -44,19 +58,40 @@ void TestSettings()
     Expect(copy.layout.offsetX == -77 && copy.layout.lineWidth == 120 && copy.layout.fontSize == 19 &&
         copy.layout.compactScale == .5f && copy.layout.expandedScale == 2 && copy.layout.expandedHeight == 600 &&
         copy.monitorDevice == c.monitorDevice && copy.language == L"en-US" && !copy.autoHideIdle && copy.clipboardLinks &&
-        copy.privacyIndicators && !copy.rightDrag && !copy.systemControls && !copy.showNotifications,
+        copy.privacyIndicators && !copy.rightDrag && !copy.systemControls && !copy.showNotifications &&
+        copy.chatNotifications && !copy.chatQQ && copy.chatWeChat && !copy.chatShowBody && copy.chatDurationSeconds == 17,
         "Appearance or behavior settings did not survive restart");
+    {
+        std::ifstream input(folder / L"settings.json");
+        const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        Expect(saved.find("\"version\":4") != std::string::npos, "Settings were not saved as version 4");
+    }
+    c.chatQQ = true; c.chatWeChat = false; c.chatNotifications = false; c.chatShowBody = true;
+    c.chatDurationSeconds = 20;
+    Expect(store.Save(c), "Chat source preference save failed");
+    const auto sources = store.Load();
+    Expect(!sources.chatNotifications && sources.chatQQ && !sources.chatWeChat && sources.chatShowBody &&
+        sources.chatDurationSeconds == 20, "Independent chat source preferences did not survive restart");
     c.layout.width = std::numeric_limits<float>::infinity(); c.layout.height = -1;
     c.layout.expandedScale = 99; c.layout.fontSize = 3; c.layout.lineWidth = -100;
+    c.chatDurationSeconds = std::numeric_limits<int>::min();
     NormalizeConfiguration(c);
     Expect(c.layout.width == 180 && c.layout.height == 32 && c.layout.expandedScale == 2 &&
-        c.layout.fontSize == 10 && c.layout.lineWidth == 24, "Invalid settings escaped normalization");
+        c.layout.fontSize == 10 && c.layout.lineWidth == 24 && c.chatDurationSeconds == 2, "Invalid settings escaped normalization");
+    c.chatDurationSeconds = std::numeric_limits<int>::max();
+    NormalizeConfiguration(c);
+    Expect(c.chatDurationSeconds == 20, "Chat popup duration exceeded the maximum");
+    std::ofstream(folder / L"settings.json") << "{\"version\":4,\"chatDurationSeconds\":1e100,\"chatNotifications\":true}";
+    Expect(store.Load().chatDurationSeconds == 20 && store.Load().chatNotifications, "Large chat duration was not bounded safely");
+    std::ofstream(folder / L"settings.json") << "{\"version\":4,\"chatDurationSeconds\":-1e100}";
+    Expect(store.Load().chatDurationSeconds == 2, "Negative chat duration was not bounded safely");
     std::ofstream(folder / L"settings.json") << "{\"version\":2,\"expandedHeight\":340,\"autoHideFullscreen\":false}";
     const auto migrated = store.Load();
     Expect(migrated.layout.expandedHeight == 200 && !migrated.autoHideFullscreen && migrated.autoHideIdle,
         "Old embedded-settings height or behavior did not migrate");
     std::ofstream(folder / L"settings.json") << "invalid json";
     Expect(store.Load().layout.width == 180, "Corrupt settings did not recover defaults");
+    expectChatDefaults(store.Load());
 
     IslandView view;
     view.Configure({}, true);

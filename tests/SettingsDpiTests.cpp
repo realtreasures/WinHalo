@@ -52,6 +52,7 @@ void Pump(SettingsWindow& settings)
 void Paint(SettingsWindow& settings)
 {
     Pump(settings);
+    Expect(settings.Handle() && IsWindow(settings.Handle()), "Owned settings window was closed before the repaint checkpoint");
     Expect(RedrawWindow(settings.Handle(), nullptr, nullptr,
         RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW) != FALSE,
         "Settings redraw failed");
@@ -258,6 +259,110 @@ void TestMemoryEdits(SettingsWindow& settings, Configuration& configuration)
     std::cout << "owned_message_edits=numeric_commit_196,Chinese_font,English_font,value_preservation,restored\n";
 }
 
+void TestChatControls(SettingsWindow& settings, Configuration& configuration, SettingsStatus& status,
+    const unsigned int& changes, const unsigned int& authorizeRequests, const unsigned int& testRequests)
+{
+    // These messages target this process's own controls. The action callbacks
+    // only increment local counters; no notification listener is constructed.
+    constexpr int master = 1092, qq = 1096, wechat = 1100, body = 1104;
+    constexpr int duration = 1108, authorize = 1112, test = 1116;
+    const Configuration originalConfiguration = configuration;
+    const SettingsStatus originalStatus = status;
+    const unsigned int originalChanges = changes, originalAuthorize = authorizeRequests, originalTests = testRequests;
+    const HWND content = FindWindowExW(settings.Handle(), nullptr, L"WinHalo.SettingsContent", nullptr);
+    const auto control = [content](int id) {
+        const HWND result = GetDlgItem(content, id);
+        if (!result) std::cerr << "Missing chat control ID=" << id << '\n';
+        Expect(result && IsWindow(result), "Owned chat notification control is missing");
+        return result;
+    };
+    const auto command = [&](int id, int notification = BN_CLICKED) {
+        SendMessageW(content, WM_COMMAND, MAKEWPARAM(id, notification), reinterpret_cast<LPARAM>(control(id)));
+        Paint(settings);
+    };
+    const auto check = [&](int id, bool checked) {
+        SendMessageW(control(id), BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+        command(id);
+    };
+    const auto enterDuration = [&](const wchar_t* value) {
+        SendMessageW(control(duration), WM_SETTEXT, 0, reinterpret_cast<LPARAM>(value));
+        command(duration, EN_KILLFOCUS);
+    };
+    Expect(!configuration.chatNotifications && configuration.chatQQ && configuration.chatWeChat &&
+        configuration.chatShowBody && configuration.chatDurationSeconds == 5,
+        "Chat controls must initially remain disabled and opt-in");
+    Expect(SendMessageW(control(master), BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+        "Chat master switch did not reflect its disabled default");
+    for (const int id : {qq, wechat, body, duration, duration + 1, duration + 2, test})
+        Expect(!IsWindowEnabled(control(id)), "A dependent chat control was enabled while chat was off");
+    Expect(IsWindowEnabled(control(authorize)) != FALSE, "Explicit notification authorization action is unavailable");
+
+    // WM_COMMAND can be forged even for disabled native controls. It must not
+    // bypass the settings layer's opt-in or trigger any action callback.
+    check(qq, false); check(wechat, false); check(body, false);
+    enterDuration(L"999"); command(duration + 2); command(test);
+    Expect(configuration.chatQQ && configuration.chatWeChat && configuration.chatShowBody &&
+        configuration.chatDurationSeconds == 5 && changes == originalChanges &&
+        authorizeRequests == originalAuthorize && testRequests == originalTests,
+        "A disabled chat command changed preferences or invoked an action");
+
+    check(master, true);
+    Expect(configuration.chatNotifications && changes == originalChanges + 1 &&
+        authorizeRequests == originalAuthorize && testRequests == originalTests &&
+        configuration.showNotifications == originalConfiguration.showNotifications,
+        "Enabling chat must change only configuration without authorizing or altering status notices");
+    for (const int id : {qq, wechat, body, duration, duration + 1, duration + 2, test})
+        Expect(IsWindowEnabled(control(id)) != FALSE, "Enabling chat did not enable its dependent controls");
+
+    const unsigned int changesBeforeAction = changes;
+    command(authorize);
+    Expect(authorizeRequests == originalAuthorize + 1 && testRequests == originalTests && changes == changesBeforeAction,
+        "Authorization button did not route exclusively to its explicit callback");
+    status.chatRequestInProgress = true;
+    settings.Refresh(configuration, status); Paint(settings);
+    Expect(!IsWindowEnabled(control(authorize)), "Authorization was not disabled during an in-progress request");
+    command(authorize);
+    Expect(authorizeRequests == originalAuthorize + 1 && changes == changesBeforeAction,
+        "An in-progress request allowed duplicate authorization");
+    status.chatRequestInProgress = false;
+    status.chatAccess = NotificationAccess::Allowed;
+    settings.Refresh(configuration, status); Paint(settings);
+    Expect(IsWindowEnabled(control(authorize)) != FALSE, "Authorization did not re-enable after request completion");
+    command(test);
+    Expect(testRequests == originalTests + 1 && authorizeRequests == originalAuthorize + 1 &&
+        changes == changesBeforeAction, "Test button did not route exclusively to its sample-popup callback");
+
+    check(qq, false);
+    Expect(!configuration.chatQQ && configuration.chatWeChat, "QQ switch changed the WeChat preference");
+    check(wechat, false); check(qq, true);
+    Expect(configuration.chatQQ && !configuration.chatWeChat, "WeChat switch was not independent from QQ");
+    check(body, false);
+    Expect(!configuration.chatShowBody && configuration.chatQQ && !configuration.chatWeChat,
+        "Message preview switch changed the selected notification sources");
+    command(duration + 2);
+    Expect(configuration.chatDurationSeconds == 6, "Chat duration plus action did not increment by one second");
+    command(duration + 1);
+    Expect(configuration.chatDurationSeconds == 5, "Chat duration minus action did not decrement by one second");
+    enterDuration(L"1"); command(duration + 1);
+    Expect(configuration.chatDurationSeconds == 2, "Typed or decremented chat duration fell below two seconds");
+    enterDuration(L"999"); command(duration + 2);
+    Expect(configuration.chatDurationSeconds == 20, "Typed or incremented chat duration exceeded twenty seconds");
+    enterDuration(L"7");
+    Expect(configuration.chatDurationSeconds == 7, "Manual chat duration input did not reach the memory callback");
+    Expect(authorizeRequests == originalAuthorize + 1 && testRequests == originalTests + 1,
+        "Editing chat preferences unexpectedly invoked authorization or the sample popup");
+
+    configuration = originalConfiguration; status = originalStatus;
+    settings.Refresh(configuration, status); Paint(settings);
+    Expect(!configuration.chatNotifications && !IsWindowEnabled(control(qq)) &&
+        !IsWindowEnabled(control(duration)) && !IsWindowEnabled(control(test)) &&
+        SendMessageW(control(qq), BM_GETCHECK, 0, 0) == BST_CHECKED &&
+        SendMessageW(control(wechat), BM_GETCHECK, 0, 0) == BST_CHECKED,
+        "Chat control fixture did not restore the original configuration before layout checks");
+    std::cout << "owned_chat_message_controls=opt_in,disabled_command_guard,explicit_authorize_only,"
+        "request_in_progress_guard,test_callback_only,independent_sources,preview,duration_bounds,restored\n";
+}
+
 struct Control
 {
     HWND window = nullptr;
@@ -271,6 +376,8 @@ struct Enumeration
     HWND content = nullptr;
     std::vector<Control> controls;
     bool failed = false;
+    int failedId = 0;
+    char reason[256]{};
 };
 BOOL CALLBACK CollectControl(HWND window, LPARAM parameter) noexcept
 {
@@ -297,12 +404,22 @@ BOOL CALLBACK CollectControl(HWND window, LPARAM parameter) noexcept
         state.controls.push_back(std::move(control));
         return TRUE;
     }
-    catch (...) { state.failed = true; return FALSE; }
+    catch (const std::exception& error)
+    {
+        state.failed = true; state.failedId = GetDlgCtrlID(window);
+        strncpy_s(state.reason, error.what(), _TRUNCATE);
+        return FALSE;
+    }
+    catch (...) { state.failed = true; state.failedId = GetDlgCtrlID(window); return FALSE; }
 }
 std::vector<Control> Controls(HWND content)
 {
+    Expect(content && IsWindow(content), "Owned settings content window was closed before control enumeration");
     Enumeration result; result.content = content;
     EnumChildWindows(content, CollectControl, reinterpret_cast<LPARAM>(&result));
+    if (result.failed || result.controls.size() < 30)
+        std::cerr << "Native enumeration count=" << result.controls.size() << ", failed ID=" << result.failedId
+            << ", reason=" << result.reason << '\n';
     Expect(!result.failed && result.controls.size() >= 30, "Native settings controls disappeared");
     std::sort(result.controls.begin(), result.controls.end(), [](const Control& a, const Control& b) { return a.id < b.id; });
     for (size_t index = 1; index < result.controls.size(); ++index)
@@ -449,7 +566,7 @@ int main()
         Configuration configuration;
         configuration.language = L"en-US"; configuration.reducedMotion = true;
         SettingsStatus status;
-        unsigned int changes = 0, startupRequests = 0;
+        unsigned int changes = 0, startupRequests = 0, authorizeRequests = 0, testRequests = 0;
         SettingsWindow settings(GetModuleHandleW(nullptr));
         std::vector<int> rowOrder;
         size_t expectedControlCount = 0;
@@ -458,9 +575,14 @@ int main()
         {
             settings.Show(configuration, status,
                 [&](const Configuration& updated) { configuration = updated; ++changes; },
-                [&](bool) { ++startupRequests; });
+                [&](bool) { ++startupRequests; },
+                [&] { ++authorizeRequests; }, [&] { ++testRequests; });
             Paint(settings);
-            if (lifecycle == 0) TestMemoryEdits(settings, configuration);
+            if (lifecycle == 0)
+            {
+                TestMemoryEdits(settings, configuration);
+                TestChatControls(settings, configuration, status, changes, authorizeRequests, testRequests);
+            }
             for (UINT dpi : std::array<UINT, 4>{96, 120, 144, 192})
             {
                 RECT suggested = SuggestedRectangle(settings.Handle(), dpi);
@@ -504,8 +626,11 @@ int main()
             else Expect(gdi <= warmedGdi + 4, "Repeated create/close retained excessive GDI resources");
         }
         Expect(startupRequests == 0, "Layout test unexpectedly requested a startup-registry change");
+        Expect(authorizeRequests == 1 && testRequests == 1,
+            "Layout or window lifecycle unexpectedly invoked notification actions");
         std::cout << "PASS: owned-DIB rounded-curve antialiasing and mouse/Tab focus-cue message simulation; "
-            "memory-only numeric and language/font changes; same-process WM_DPICHANGED simulation at 100/125/150/200 percent; "
+            "memory-only numeric, language/font and chat-control opt-in/action/duration checks; "
+            "same-process WM_DPICHANGED simulation at 100/125/150/200 percent; "
             "native row order and non-overlap; 200 top/bottom scroll pairs preserve controls; "
             "two create/close lifecycles without WM_QUIT; memory-only configuration callbacks=" << changes
             << "; no system DPI, external pointer/keyboard input, clipboard or startup changes; "

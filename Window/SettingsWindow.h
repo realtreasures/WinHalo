@@ -1,6 +1,7 @@
 #pragma once
 #include "../Core/Platform.h"
 #include "../Core/Configuration.h"
+#include "../Services/NotificationTypes.h"
 #include <functional>
 #include <memory>
 
@@ -16,6 +17,9 @@ struct SettingsStatus
     std::wstring brightnessStatus;
     std::wstring privacyStatus;
     std::wstring saveError;
+    NotificationAccess chatAccess = NotificationAccess::Disabled;
+    std::wstring chatStatus;
+    bool chatRequestInProgress = false;
 };
 
 class SettingsWindow
@@ -28,7 +32,8 @@ public:
     SettingsWindow(const SettingsWindow&) = delete;
     SettingsWindow& operator=(const SettingsWindow&) = delete;
     void Show(const Configuration& configuration, const SettingsStatus& status,
-        ChangeHandler change, StartupHandler startup);
+        ChangeHandler change, StartupHandler startup,
+        std::function<void()> chatAuthorize = {}, std::function<void()> chatTest = {});
     void Refresh(const Configuration& configuration, const SettingsStatus& status);
     void Close();
     HWND Handle() const noexcept;

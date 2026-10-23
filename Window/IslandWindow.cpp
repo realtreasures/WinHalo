@@ -7,6 +7,7 @@
 #include <memory>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <wtsapi32.h>
 #pragma comment(lib, "Comctl32.lib")
 
 namespace winisland
@@ -607,6 +608,10 @@ LRESULT IslandWindow::ProcessMessage(UINT message, WPARAM wParam, LPARAM lParam)
         return TRUE;
     case ServiceMessage:
         if (serviceHandler_) serviceHandler_();
+        return 0;
+    case WM_WTSSESSION_CHANGE:
+        if (sessionLockHandler_ && (wParam == WTS_SESSION_LOCK || wParam == WTS_SESSION_UNLOCK))
+            sessionLockHandler_(wParam == WTS_SESSION_LOCK);
         return 0;
     case WM_CLIPBOARDUPDATE:
         if (clipboardListening_ && preferences_.clipboardLinks && clipboardHandler_) clipboardHandler_();

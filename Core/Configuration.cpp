@@ -38,6 +38,7 @@ void NormalizeConfiguration(Configuration& config) noexcept
     if (config.language != L"system" && config.language != L"zh-CN" && config.language != L"en-US")
         config.language = L"system";
     if (config.monitorDevice.size() > 128) config.monitorDevice.clear();
+    config.chatDurationSeconds = std::clamp(config.chatDurationSeconds, 2, 20);
     try { Spring spring; spring.Configure(config.spring); }
     catch (...) { config.spring = {}; }
 }
@@ -54,7 +55,7 @@ Configuration ConfigurationStore::Load() noexcept
         const std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         const auto json = JsonObject::Parse(winrt::to_hstring(bytes));
         const double version = json.GetNamedNumber(L"version", 1);
-        if (version != 1 && version != 2 && version != 3) throw std::runtime_error("Unsupported settings version");
+        if (version != 1 && version != 2 && version != 3 && version != 4) throw std::runtime_error("Unsupported settings version");
         Configuration config;
         config.layout.width = static_cast<float>(json.GetNamedNumber(L"width", config.layout.width));
         config.layout.height = static_cast<float>(json.GetNamedNumber(L"height", config.layout.height));
@@ -81,6 +82,11 @@ Configuration ConfigurationStore::Load() noexcept
         config.systemControls = json.GetNamedBoolean(L"systemControls", true);
         config.clipboardLinks = json.GetNamedBoolean(L"clipboardLinks", false);
         config.privacyIndicators = json.GetNamedBoolean(L"privacyIndicators", false);
+        config.chatNotifications = json.GetNamedBoolean(L"chatNotifications", false);
+        config.chatQQ = json.GetNamedBoolean(L"chatQQ", true);
+        config.chatWeChat = json.GetNamedBoolean(L"chatWeChat", true);
+        config.chatShowBody = json.GetNamedBoolean(L"chatShowBody", true);
+        config.chatDurationSeconds = static_cast<int>(std::clamp(json.GetNamedNumber(L"chatDurationSeconds", 5), 2.0, 20.0));
         config.monitorDevice = json.GetNamedString(L"monitorDevice", L"");
         config.language = json.GetNamedString(L"language", L"system");
         if (version == 1)
@@ -110,7 +116,7 @@ bool ConfigurationStore::Save(const Configuration& config) noexcept
     {
         JsonObject json;
         const auto number = [&](const wchar_t* key, double value) { json.Insert(key, JsonValue::CreateNumberValue(value)); };
-        number(L"version", 3);
+        number(L"version", 4);
         number(L"width", config.layout.width);
         number(L"height", config.layout.height);
         number(L"radius", config.layout.radius);
@@ -136,6 +142,11 @@ bool ConfigurationStore::Save(const Configuration& config) noexcept
         json.Insert(L"systemControls", JsonValue::CreateBooleanValue(config.systemControls));
         json.Insert(L"clipboardLinks", JsonValue::CreateBooleanValue(config.clipboardLinks));
         json.Insert(L"privacyIndicators", JsonValue::CreateBooleanValue(config.privacyIndicators));
+        json.Insert(L"chatNotifications", JsonValue::CreateBooleanValue(config.chatNotifications));
+        json.Insert(L"chatQQ", JsonValue::CreateBooleanValue(config.chatQQ));
+        json.Insert(L"chatWeChat", JsonValue::CreateBooleanValue(config.chatWeChat));
+        json.Insert(L"chatShowBody", JsonValue::CreateBooleanValue(config.chatShowBody));
+        number(L"chatDurationSeconds", std::clamp(config.chatDurationSeconds, 2, 20));
         json.Insert(L"monitorDevice", JsonValue::CreateStringValue(config.monitorDevice));
         json.Insert(L"language", JsonValue::CreateStringValue(config.language));
         const auto folder = DataDirectory();

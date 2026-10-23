@@ -1,7 +1,13 @@
 ﻿#include "Application.h"
 #include "../Utils/Win32Error.h"
 #include "../Utils/Localization.h"
+#include "../Services/MediaAppResolver.h"
 #include <shellapi.h>
+#include <wtsapi32.h>
+#include <winrt/Windows.UI.Notifications.Management.h>
+#include <winrt/Windows.Foundation.h>
+#include <atomic>
+#include <deque>
 #include <cwctype>
 #include <cmath>
 #include <exception>
@@ -14,6 +20,14 @@
 
 namespace winisland
 {
+using winrt::Windows::UI::Notifications::Management::UserNotificationListener;
+using winrt::Windows::UI::Notifications::Management::UserNotificationListenerAccessStatus;
+struct ChatAuthorization
+{
+    winrt::Windows::Foundation::IAsyncOperation<UserNotificationListenerAccessStatus> operation{nullptr};
+    std::atomic_bool finished = false;
+    std::atomic_bool cancelled = false;
+};
 // 每种服务只保留最新状态，事件洪水不会向 UI 堆积大批封面或消息。
 struct ServiceMailbox
 {
@@ -23,6 +37,8 @@ struct ServiceMailbox
     std::optional<MediaSnapshot> media;
     std::optional<VolumeSnapshot> volume;
     std::optional<BehaviorSnapshot> behavior;
+    std::deque<ChatNotification> chat;
+    std::optional<NotificationStatus> chatStatus;
 
     template<class Snapshot> void Publish(Snapshot snapshot)
     {
@@ -30,6 +46,12 @@ struct ServiceMailbox
         if (!window) return;
         if constexpr (std::is_same_v<Snapshot, MediaSnapshot>) media = std::move(snapshot);
         else if constexpr (std::is_same_v<Snapshot, BehaviorSnapshot>) behavior = std::move(snapshot);
+        else if constexpr (std::is_same_v<Snapshot, NotificationStatus>) chatStatus = std::move(snapshot);
+        else if constexpr (std::is_same_v<Snapshot, ChatNotification>)
+        {
+            if (chat.size() >= NotificationQueue::Capacity) chat.pop_front();
+            chat.push_back(std::move(snapshot));
+        }
         else
         {
             // 合并时保留真实变化标志，避免紧随其后的刷新吞掉通知。
@@ -42,8 +64,9 @@ struct ServiceMailbox
 
 Application::Application(HINSTANCE instance)
     : store_(logger_), configuration_(store_.Load()), view_(configuration_.layout),
-      renderer_(logger_), window_(instance, renderer_, view_, logger_), settings_(instance),
-      mailbox_(std::make_shared<ServiceMailbox>()), mediaService_(logger_), volumeService_(logger_), behaviorService_(logger_)
+      renderer_(logger_), window_(instance, renderer_, view_, logger_), settings_(instance), chatWindow_(instance),
+      mailbox_(std::make_shared<ServiceMailbox>()), mediaService_(logger_), volumeService_(logger_), behaviorService_(logger_),
+      notificationService_(logger_)
 {
     SetUiLanguage(configuration_.language);
     view_.ApplyLayout(configuration_.layout, configuration_.autoHideIdle);
@@ -58,10 +81,20 @@ Application::Application(HINSTANCE instance)
     });
     window_.SetWheelHandler([this](int steps, bool brightness) { OnWheel(steps, brightness); });
     window_.SetClipboardHandler([this] { OnClipboard(); });
+    window_.SetSessionLockHandler([this](bool locked) {
+        sessionLocked_ = locked;
+        RefreshChatWindow();
+    });
+    chatWindow_.SetDismissHandler([this] {
+        activeChat_.reset();
+        // Advance the queue after the callback unwinds, avoiding window reentrancy.
+        if (window_.Handle()) PostMessageW(window_.Handle(), WM_NULL, 0, 0);
+    });
 }
 
 Application::~Application()
 {
+    CancelChatAuthorization();
     {
         const std::lock_guard lock(mailbox_->mutex);
         mailbox_->window = nullptr;
@@ -69,6 +102,11 @@ Application::~Application()
     mediaService_.Stop();
     volumeService_.Stop();
     behaviorService_.Stop();
+    notificationService_.Stop();
+    chatWindow_.SetDismissHandler({});
+    chatWindow_.Close();
+    notificationQueue_.Clear();
+    if (sessionNotifications_ && window_.Handle()) WTSUnRegisterSessionNotification(window_.Handle());
     settings_.Close();
     fullscreenMonitor_.Stop();
     batteryService_.Stop();
@@ -83,6 +121,10 @@ int Application::Run()
         window_.Create([this](WindowEvent event) { OnWindowEvent(event); }, false);
         window_.ApplyPreferences(configuration_);
         window_.SetNativeGlass(configuration_.nativeGlass);
+        sessionNotifications_ = WTSRegisterSessionNotification(window_.Handle(), NOTIFY_FOR_THIS_SESSION) != FALSE;
+        HDESK inputDesktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+        sessionLocked_ = inputDesktop == nullptr;
+        if (inputDesktop) CloseDesktop(inputDesktop);
         {
             const std::lock_guard lock(mailbox_->mutex);
             mailbox_->window = window_.Handle();
@@ -108,6 +150,12 @@ int Application::Run()
                 if (const auto mailbox = weak.lock()) mailbox->Publish(std::move(snapshot));
             });
             behaviorService_.Configure(configuration_.monitorDevice, configuration_.systemControls, configuration_.privacyIndicators);
+            notificationService_.Start([weak](ChatNotification notification) {
+                if (const auto mailbox = weak.lock()) mailbox->Publish(std::move(notification));
+            }, [weak](NotificationStatus status) {
+                if (const auto mailbox = weak.lock()) mailbox->Publish(std::move(status));
+            });
+            notificationService_.Configure(configuration_.chatNotifications, configuration_.chatQQ, configuration_.chatWeChat);
         }
         // 创建时保持隐藏，先判断前台全屏，避免启动时在游戏上方闪现。
         RefreshDesktop();
@@ -184,6 +232,7 @@ void Application::AnimateFrame()
     const auto animated = Clock::now();
     animationMilliseconds_ = std::chrono::duration<double, std::milli>(animated - begin).count();
     window_.Render();
+    PositionChatWindow();
     cpuMilliseconds_ = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
     if (std::chrono::duration<double>(begin - previousMetric_).count() > 2)
     {
@@ -285,11 +334,13 @@ void Application::ShowSettings()
 {
     ReadSystemOptions();
     settings_.Show(configuration_, settingsStatus_, [this](const Configuration& value) { ApplyConfiguration(value); },
-        [this](bool enabled) { const auto result = startup_.SetEnabled(enabled); ReadSystemOptions(result.error); });
+        [this](bool enabled) { const auto result = startup_.SetEnabled(enabled); ReadSystemOptions(result.error); },
+        [this] { RequestChatAccess(); }, [this] { TestChatNotification(); });
 }
 
 void Application::RefreshSettings()
 {
+    RefreshChatStatus();
     settingsStatus_.brightnessAvailable = behavior_.brightnessAvailable;
     settingsStatus_.privacyAvailable = behavior_.cameraAvailable || behavior_.microphoneAvailable;
     settingsStatus_.brightnessStatus = englishLanguage ? (behavior_.brightnessAvailable ? L"Selected display supports brightness adjustment" :
@@ -305,6 +356,10 @@ void Application::ApplyConfiguration(Configuration configuration)
     const auto& a = configuration_.layout;
     const auto& b = configuration.layout;
     const bool previewCompact = a.width != b.width || a.height != b.height || a.compactScale != b.compactScale || a.fontSize != b.fontSize;
+    const bool chatChanged = configuration_.chatNotifications != configuration.chatNotifications ||
+        configuration_.chatQQ != configuration.chatQQ || configuration_.chatWeChat != configuration.chatWeChat;
+    const bool chatPresentationChanged = configuration_.chatShowBody != configuration.chatShowBody ||
+        configuration_.chatDurationSeconds != configuration.chatDurationSeconds;
     configuration_ = std::move(configuration);
     SetUiLanguage(configuration_.language);
     view_.Configure(configuration_.spring, configuration_.reducedMotion);
@@ -315,6 +370,15 @@ void Application::ApplyConfiguration(Configuration configuration)
     window_.SetNativeGlass(configuration_.nativeGlass);
     if (integrationEnabled_)
         behaviorService_.Configure(configuration_.monitorDevice, configuration_.systemControls, configuration_.privacyIndicators);
+    if (integrationEnabled_ && chatChanged)
+        notificationService_.Configure(configuration_.chatNotifications, configuration_.chatQQ, configuration_.chatWeChat);
+    if (chatChanged || chatPresentationChanged)
+    {
+        notificationQueue_.Clear();
+        chatWindow_.Dismiss(true);
+        activeChat_.reset();
+        if (!configuration_.chatNotifications) CancelChatAuthorization();
+    }
     if (!configuration_.showNotifications || !configuration_.clipboardLinks)
     {
         if (!configuration_.showNotifications || view_.LinkNotice()) view_.DismissTransientToast();
@@ -327,6 +391,179 @@ void Application::ApplyConfiguration(Configuration configuration)
     RefreshDesktop();
     window_.Render();
     PostMessageW(window_.Handle(), WM_NULL, 0, 0);
+}
+
+void Application::CancelChatAuthorization() noexcept
+{
+    if (!chatAuthorization_) return;
+    chatAuthorization_->cancelled = true;
+    try { if (chatAuthorization_->operation) chatAuthorization_->operation.Cancel(); } catch (...) {}
+    chatAuthorization_.reset();
+}
+
+void Application::RefreshChatStatus()
+{
+    settingsStatus_.chatAccess = notificationStatus_.access;
+    settingsStatus_.chatRequestInProgress = chatAuthorization_ && !chatAuthorization_->finished;
+    if (!integrationEnabled_)
+    {
+        settingsStatus_.chatStatus = UiText(L"测试模式：实际消息监听已停用", L"Test mode: real notification listening is disabled");
+        return;
+    }
+    if (settingsStatus_.chatRequestInProgress)
+    {
+        settingsStatus_.chatStatus = UiText(L"请在 Windows 提示中选择是否允许通知访问", L"Choose whether to allow notification access in the Windows prompt");
+        return;
+    }
+    switch (notificationStatus_.access)
+    {
+    case NotificationAccess::Disabled:
+        settingsStatus_.chatStatus = UiText(L"聊天消息通知已关闭", L"Chat notifications are off"); break;
+    case NotificationAccess::IdentityRequired:
+        settingsStatus_.chatStatus = UiText(L"请先安装通知功能组件，再重新打开 WinHalo", L"Install the notification component and restart WinHalo"); break;
+    case NotificationAccess::NotRequested:
+        settingsStatus_.chatStatus = UiText(L"尚未授权，点击“通知授权”后允许访问", L"Not authorized; select Notification access to allow access"); break;
+    case NotificationAccess::Allowed:
+        settingsStatus_.chatStatus = configuration_.chatNotifications ?
+            UiText(L"已授权：等待 QQ / 微信的新系统通知", L"Authorized: waiting for new QQ / WeChat system notifications") :
+            UiText(L"已授权；聊天消息通知当前关闭", L"Authorized; chat notifications are currently off"); break;
+    case NotificationAccess::Denied:
+        settingsStatus_.chatStatus = UiText(L"访问被拒绝；点击“通知授权”前往 Windows 设置", L"Access denied; select Notification access to open Windows Settings"); break;
+    case NotificationAccess::Unavailable:
+        settingsStatus_.chatStatus = UiText(L"此系统暂不支持通知监听", L"Notification listening is unavailable on this system"); break;
+    case NotificationAccess::Error:
+        settingsStatus_.chatStatus = UiText(L"通知监听暂时不可用，稍后会重试", L"Notification listening is temporarily unavailable; retrying later"); break;
+    }
+}
+
+void Application::RequestChatAccess()
+{
+    if (chatAuthorization_ || !integrationEnabled_) return;
+    notificationStatus_ = NotificationService::ReadAccess();
+    if (notificationStatus_.access == NotificationAccess::Denied)
+    {
+        ShellExecuteW(settings_.Handle(), L"open", L"ms-settings:privacy-notifications", nullptr, nullptr, SW_SHOWNORMAL);
+        RefreshSettings();
+        return;
+    }
+    if (notificationStatus_.access != NotificationAccess::NotRequested)
+    {
+        if (integrationEnabled_)
+            notificationService_.Configure(configuration_.chatNotifications, configuration_.chatQQ, configuration_.chatWeChat);
+        RefreshSettings();
+        return;
+    }
+    try
+    {
+        // RequestAccessAsync must originate on this UI thread, only after the
+        // user's explicit button press. The service never requests consent.
+        chatAuthorization_ = std::make_shared<ChatAuthorization>();
+        chatAuthorization_->operation = UserNotificationListener::Current().RequestAccessAsync();
+        const std::weak_ptr<ChatAuthorization> request = chatAuthorization_;
+        const std::weak_ptr<ServiceMailbox> mailbox = mailbox_;
+        chatAuthorization_->operation.Completed([request, mailbox](const auto& operation, auto) noexcept {
+            const auto state = request.lock();
+            if (!state || state->cancelled) return;
+            NotificationStatus result{NotificationAccess::Error, {}};
+            try
+            {
+                const auto access = operation.GetResults();
+                result.access = access == UserNotificationListenerAccessStatus::Allowed ? NotificationAccess::Allowed :
+                    access == UserNotificationListenerAccessStatus::Denied ? NotificationAccess::Denied : NotificationAccess::NotRequested;
+            }
+            catch (...) {}
+            state->finished = true;
+            if (!state->cancelled) if (const auto target = mailbox.lock()) target->Publish(std::move(result));
+        });
+    }
+    catch (...)
+    {
+        CancelChatAuthorization();
+        notificationStatus_ = {NotificationAccess::Error, {}};
+    }
+    RefreshSettings();
+}
+
+RECT Application::ChatAnchor() const
+{
+    const auto frame = view_.Frame();
+    const float scale = GetDpiForWindow(window_.Handle()) / 96.0f;
+    POINT origin{}; ClientToScreen(window_.Handle(), &origin);
+    return {origin.x + static_cast<LONG>(std::lround((frame.centerX - frame.width / 2) * scale)),
+        origin.y + static_cast<LONG>(std::lround(frame.top * scale)),
+        origin.x + static_cast<LONG>(std::lround((frame.centerX + frame.width / 2) * scale)),
+        origin.y + static_cast<LONG>(std::lround((frame.top + frame.height) * scale))};
+}
+
+void Application::PositionChatWindow()
+{
+    try
+    {
+        if (chatWindow_.Visible()) chatWindow_.SetAnchor(ChatAnchor(), GetDpiForWindow(window_.Handle()));
+    }
+    catch (...)
+    {
+        chatWindow_.Dismiss(true); activeChat_.reset();
+        logger_.Write("Chat popup positioning unavailable; notification content omitted.");
+    }
+}
+
+void Application::DisplayChat(ChatNotification notification)
+{
+    activeChat_ = std::move(notification);
+    try
+    {
+        chatWindow_.Show(*activeChat_, ChatAnchor(), GetDpiForWindow(window_.Handle()), configuration_.chatDurationSeconds,
+            configuration_.chatShowBody, configuration_.reducedMotion, notificationQueue_.Size(),
+            [](const ChatNotification& value) { if (!value.test && value.application) OpenMediaApp(*value.application); });
+    }
+    catch (...)
+    {
+        activeChat_.reset();
+        logger_.Write("Chat popup rendering unavailable; notification content omitted.");
+    }
+}
+
+void Application::RefreshChatWindow()
+{
+    const bool suppressed = !window_.Visible() || sessionLocked_ || chatFullscreen_;
+    chatWindow_.SetSuppressed(suppressed);
+    if (suppressed)
+    {
+        notificationQueue_.Clear(); activeChat_.reset();
+        return;
+    }
+    notificationQueue_.DiscardExpired();
+    if (!chatWindow_.Visible())
+    {
+        activeChat_.reset();
+        while (auto notification = notificationQueue_.Pop())
+        {
+            if (!notification->test && (!configuration_.chatNotifications || notificationStatus_.access != NotificationAccess::Allowed)) continue;
+            DisplayChat(std::move(*notification));
+            break;
+        }
+    }
+    try { chatWindow_.SetPendingCount(notificationQueue_.Size()); }
+    catch (...)
+    {
+        chatWindow_.Dismiss(true); activeChat_.reset();
+        logger_.Write("Chat popup update unavailable; notification content omitted.");
+    }
+    PositionChatWindow();
+}
+
+void Application::TestChatNotification()
+{
+    if (!configuration_.chatNotifications) return;
+    ChatNotification notification;
+    notification.id = 0; notification.app = ChatApp::WeChat; notification.source = L"WinHalo.Test";
+    notification.appName = UiText(L"微信 · 演示", L"WeChat · Preview");
+    notification.title = UiText(L"测试消息", L"Test message");
+    notification.body = UiText(L"这是 WinHalo 弹窗预览，未读取你的真实聊天内容。", L"This is a WinHalo preview, without reading real chat messages.");
+    notification.test = true;
+    notificationQueue_.Push(std::move(notification));
+    RefreshChatWindow();
 }
 
 void Application::OnWheel(int steps, bool brightness)
@@ -392,8 +629,10 @@ void Application::OnClipboard()
 
 void Application::RefreshDesktop()
 {
-    const bool fullscreen = integrationEnabled_ && configuration_.autoHideFullscreen && fullscreenMonitor_.Check();
+    chatFullscreen_ = integrationEnabled_ && fullscreenMonitor_.Check();
+    const bool fullscreen = configuration_.autoHideFullscreen && chatFullscreen_;
     window_.SetFullscreenHidden(fullscreen);
+    RefreshChatWindow();
 }
 
 void Application::RefreshBattery()
@@ -413,14 +652,50 @@ void Application::DrainServices()
     std::optional<MediaSnapshot> media;
     std::optional<VolumeSnapshot> volume;
     std::optional<BehaviorSnapshot> behavior;
+    std::deque<ChatNotification> chat;
+    std::optional<NotificationStatus> chatStatus;
     {
         const std::lock_guard lock(mailbox_->mutex);
         media.swap(mailbox_->media);
         volume.swap(mailbox_->volume);
         behavior.swap(mailbox_->behavior);
+        chat.swap(mailbox_->chat);
+        chatStatus.swap(mailbox_->chatStatus);
         mailbox_->posted = false;
     }
     if (!view_.Animating()) previousFrame_ = Clock::now();
+    if (chatStatus)
+    {
+        notificationStatus_ = std::move(*chatStatus);
+        if (chatAuthorization_ && chatAuthorization_->finished)
+        {
+            chatAuthorization_.reset();
+            if (integrationEnabled_)
+                notificationService_.Configure(configuration_.chatNotifications, configuration_.chatQQ, configuration_.chatWeChat);
+        }
+        if (notificationStatus_.access != NotificationAccess::Allowed)
+        {
+            notificationQueue_.Clear();
+            chatWindow_.Dismiss(true);
+            activeChat_.reset();
+        }
+        RefreshSettings();
+    }
+    for (auto& item : chat)
+    {
+        if (!configuration_.chatNotifications || notificationStatus_.access != NotificationAccess::Allowed ||
+            !window_.Visible() || sessionLocked_ || chatFullscreen_ ||
+            (item.app == ChatApp::QQ && !configuration_.chatQQ) ||
+            (item.app == ChatApp::WeChat && !configuration_.chatWeChat) || item.app == ChatApp::Unknown) continue;
+        if (!configuration_.chatShowBody) item.body.clear();
+        if (activeChat_ && activeChat_->id == item.id && activeChat_->source == item.source &&
+            activeChat_->createdAt == item.createdAt && activeChat_->test == item.test)
+        {
+            DisplayChat(std::move(item));
+        }
+        else notificationQueue_.Push(std::move(item));
+    }
+    RefreshChatWindow();
     if (media)
     {
         window_.MediaChanged(*media);
@@ -484,6 +759,7 @@ DWORD Application::ContentTimeout() const noexcept
 
 void Application::RefreshTimedContent()
 {
+    RefreshChatWindow();
     const auto now = Clock::now();
     bool dirty = false;
     if (window_.Visible() && now >= view_.IdleDeadline())
@@ -533,6 +809,7 @@ void Application::OnWindowEvent(WindowEvent event)
         break;
     case WindowEvent::WindowHidden:
         view_.SetHostVisible(false);
+        RefreshChatWindow();
         return;
     case WindowEvent::OutsideClick:
         if (view_.Expanded() && view_.Page() == IslandPage::Media) view_.Collapse();
@@ -558,6 +835,7 @@ void Application::OnWindowEvent(WindowEvent event)
     }
     // 设置（如减少动态效果）可直接改变当前布局，必须提交最终帧。
     window_.Render();
+    PositionChatWindow();
     // Sent cursor/menu messages can change the view while the outer loop is
     // waiting without a DXGI handle. Queue input so it recalculates that wait.
     if (view_.Animating() || renderer_.NeedsFrame())

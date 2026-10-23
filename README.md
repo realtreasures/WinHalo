@@ -1,6 +1,6 @@
 ﻿# WinHalo
 
-基于 `init.md` 的 Windows 原生灵动岛。保留原有 Visual Studio 2022 工程，使用 C++20；已实现横线待机、深色半透明时钟 / 音乐胶囊、可中断弹簧动画和系统 Now Playing，并保留音量、电池、托盘、全屏隐藏与开机启动设置。支持的 Windows 11 上可选择开启独立原生桌面模糊。
+基于 `init.md` 的 Windows 原生灵动岛。保留原有 Visual Studio 2022 工程，使用 C++20；已实现横线待机、深色半透明时钟 / 音乐胶囊、可中断弹簧动画和系统 Now Playing，并保留音量、电池、托盘、全屏隐藏与开机启动设置。支持的 Windows 11 上可选择开启独立原生桌面模糊。另提供默认关闭的 QQ / 微信消息卡片，通过 Windows 通知中心接入，需安装应用身份包并由用户授权。
 
 解决方案和应用现已正式更名为 WinHalo。重命名范围、构建结果、完整文件清单及旧配置 / 自启动项迁移说明见 [重命名记录](docs/RENAME_TO_WINHALO.md)。内部 `winisland` 命名空间保留，Animation、Core、Graphics、Services 等模块结构与算法不变。
 
@@ -51,7 +51,8 @@ MSBuild.exe .\WinHalo.sln /m /t:Build /p:Configuration=Release /p:Platform=x64
 - 行为支持开机启动、离开 5 秒收成横线、全屏隐藏、右键长按拖动、状态通知、系统控制、剪贴板链接提示、摄像头 / 麦克风活动提示、中文 / 英文 / 跟随系统。
 - 右键短按打开设置；按住至少 400 ms 后拖动修改位置并保存。在胶囊上滚轮调音量，Shift + 滚轮调所选屏幕亮度，每格 5%。亮度需要硬件支持 WMI 或 DDC/CI，设置中显示检测结果。
 - 剪贴板链接与设备活动提示默认关闭。链接仅接受完整 HTTP(S) 地址，先询问，只有点击“打开”才启动默认浏览器。
-- 通知开关控制 WinHalo 自己的音量、低电量、亮度、链接和设备活动提示，未接入其他应用的 Windows 通知。设备活动只读取系统元数据；驱动或系统未提供报告时显示不可用 / 等待状态，不采集音视频。
+- “状态通知”控制 WinHalo 自己的音量、低电量、亮度、链接和设备活动提示；“聊天消息”另有独立总开关，默认关闭，控制来自 Windows 通知中心的 QQ / 微信消息。设备活动只读取系统元数据；驱动或系统未提供报告时显示不可用 / 等待状态，不采集音视频。
+- 聊天消息可分别启用 QQ / 微信、隐藏正文、设置 2–20 秒停留时间，并查看通知访问状态、主动申请权限或显示测试卡片。真实消息需要应用身份与用户授权；测试卡片仅预览样式。安装和验证步骤见 [QQ / 微信消息说明](docs/CHAT_NOTIFICATIONS.md)。
 - 设置窗口正常获得键盘焦点供输入；日常横线、胶囊及播放按钮继续不抢焦点。恢复默认不修改真实开机启动注册状态。
 - 设置滚动采用批量布局与统一重绘，圆角、开关和图标使用抗锯齿绘制；鼠标点击导航不显示黑色焦点框，Tab 导航保留蓝色圆角焦点提示。
 
@@ -69,6 +70,7 @@ MSBuild.exe .\WinHalo.sln /m /t:Build /p:Configuration=Release /p:Platform=x64
 | 日常使用扩展 | 电池 / 充电及低电量提示、全屏事件监听、手动隐藏与主动显示策略、系统设置分页、当前用户开机启动开关 |
 | 材质与媒体扩展 | 深色材质、柔和阴影、时钟 / 音乐胶囊、四模块导航、圆角封面与专辑、平滑进度和均衡器、可选独立实时模糊 |
 | 横线待机扩展 | 88 × 8 DIP 横线、触碰唤醒、紧凑胶囊离开 5 秒收起、重入取消，以及菜单 / 隐藏 / 通知的计时协调 |
+| 聊天消息扩展 | 独立 QQ / 微信卡片、通知基线与去重、有界队列、悬停暂停、权限状态、设置入口与身份测试包；真实消息接入待本机安装授权验收 |
 
 阶段六的 120 / 144 Hz 实屏表现、混合 DPI 多屏热插拔和 Windows 10 实机兼容性仍需实机验收。没有虚报最终显示 FPS、长期 CPU / GPU 占用或内存数据。
 
@@ -106,7 +108,7 @@ Debug 性能菜单显示最近一次采样的提交帧率、UI 帧处理耗时�
 
 ```json
 {
-  "version": 2,
+  "version": 4,
   "width": 180,
   "height": 44,
   "radius": 22,
@@ -119,11 +121,16 @@ Debug 性能菜单显示最近一次采样的提交帧率、UI 帧处理耗时�
   "speed": 1,
   "reducedMotion": false,
   "autoHideFullscreen": true,
-  "nativeGlass": false
+  "nativeGlass": false,
+  "chatNotifications": false,
+  "chatQQ": true,
+  "chatWeChat": true,
+  "chatShowBody": true,
+  "chatDurationSeconds": 5
 }
 ```
 
-尺寸单位为 DIP，实际胶囊顶端距离为 `topGap + insetTop + offsetY`，默认 28 DIP。宿主包络随设置计算，动画期间不改变。播放器基础高度至少 200 DIP。配置版本 3 保存新增选项；版本 1 / 2 保留系统偏好，并将旧设置面板高度迁移为播放器默认 200 DIP。测试可用 `WINHALO_DATA_DIR` 隔离配置和日志。
+尺寸单位为 DIP，实际胶囊顶端距离为 `topGap + insetTop + offsetY`，默认 28 DIP。宿主包络随设置计算，动画期间不改变。播放器基础高度至少 200 DIP。配置版本 4 保存聊天消息偏好，兼容版本 1 / 2 / 3；旧配置未提供聊天字段时保持聊天功能关闭。版本 1 / 2 保留系统偏好，并将旧设置面板高度迁移为播放器默认 200 DIP。测试可用 `WINHALO_DATA_DIR` 隔离配置和日志。
 
 ## 主要文件
 
@@ -140,6 +147,9 @@ Debug 性能菜单显示最近一次采样的提交帧率、UI 帧处理耗时�
 | `Services/BatteryService.h/.cpp`、`BatteryTypes.h` | 电源通知注册 / 释放、真实状态读取、未知值处理和低电量提示去重 |
 | `Services/FullscreenMonitor.h/.cpp`、`Core/VisibilityPolicy.h` | 前台 / 窗口事件、DWM 边界、显示器匹配、自动和手动可见性策略 |
 | `Services/StartupRegistration.h/.cpp` | 当前用户启动项读取和开关、路径引用及隔离测试键限制 |
+| `Services/NotificationService.h/.cpp`、`NotificationTypes.h` | Windows 通知访问状态、QQ / 微信筛选、启动基线与新通知读取 |
+| `Services/NotificationPolicy.h/.cpp`、`Window/ChatNotificationWindow.h/.cpp` | 聊天卡片队列、去重、展示时限和独立无焦点窗口 |
+| `packaging/notifications/`、`docs/CHAT_NOTIFICATIONS.md` | 应用身份清单、开发签名测试包与安装 / 卸载说明 |
 | `tests/SystemBehaviorTests.cpp`、`system_smoke.py` | 电池 / 隐藏策略 / 注册表单元测试，真实全屏窗口和系统设置桌面验证 |
 | `Services/VolumeService.h/.cpp`、`VolumeTypes.h` | Core Audio 默认输出、音量 / 静音命令、设备变化、回调及工作线程生命周期 |
 | `Graphics/CompositionRenderer.h/.cpp` | D3D11 / DXGI / D2D / DirectWrite / DirectComposition、region、资源恢复 |
