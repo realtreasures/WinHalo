@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="WinHalo 是 Windows 桌面上的灵动岛。查看正在播放、切换音乐软件，让音量、电量和消息提示出现在屏幕顶部。">
+  <title>WinHalo · Windows 桌面上的灵动岛</title>
+  <link rel="icon" href="./favicon.ico">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./demo.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="site-header wrap">
+    <a class="brand" href="#main" aria-label="WinHalo 首页"><span class="brand-mark" aria-hidden="true"></span>WinHalo</a>
+    <nav aria-label="官网导航">
+      <a href="#features">功能</a>
+      <a href="#start">使用说明</a>
+      <a href="https://github.com/realtreasures/WinHalo">GitHub</a>
+    </nav>
+    <a class="button small primary" href="#start">获取 WinHalo</a>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="platform"><span class="windows-mark" aria-hidden="true"></span>Windows 桌面应用</p>
+        <h1 id="hero-title">Windows 桌面<span>上的灵动岛</span></h1>
+        <p class="hero-lede">查看正在播放的歌、切换播放器，接收音量、电量和消息提示。它们出现在屏幕顶部，手上的事可以接着做。</p>
+        <div class="actions">
+          <a class="button primary" href="#start">获取 WinHalo</a>
+          <a class="button secondary" href="#demo">体验演示</a>
+        </div>
+      </div>
+
+      <figure class="demo" id="demo" aria-labelledby="demo-title">
+        <div class="demo-frame">
+          <figcaption class="demo-caption">
+            <span id="demo-title"><span class="caption-light" aria-hidden="true"></span>互动桌面</span>
+            <span>网页演示 · 使用示例数据</span>
+          </figcaption>
+          <div class="desktop">
+            <div class="island" data-state="compact" data-source="0" data-playing="true">
+              <div class="island-shape" aria-hidden="true"></div>
+              <div class="island-content">
+                <button class="wake" type="button" aria-label="唤出音乐胶囊"></button>
+                <button class="track compact-track" type="button" aria-label="展开播放器">
+                  <span class="cover" aria-hidden="true"></span>
+                  <span class="track-meta"><strong data-track>蓝色轨道</strong><span data-artist>北岸电台</span></span>
+                </button>
+                <button class="satellite" type="button" aria-label="切换到播放器 B"><span class="source-glyph" aria-hidden="true">B</span></button>
+                <div class="player" aria-label="音乐播放器">
+                  <div class="track">
+                    <span class="cover" aria-hidden="true"></span>
+                    <span class="track-meta"><strong data-track>蓝色轨道</strong><span data-artist>北岸电台</span></span>
+                    <span class="play-status">播放中</span>
+                  </div>
+                  <div class="timeline">
+                    <span class="elapsed">0:42</span>
+                    <progress aria-label="示例播放进度" value="42" max="208"></progress>
+                    <span class="duration">3:28</span>
+                  </div>
+                  <div class="player-controls">
+                    <button class="player-source" type="button" aria-label="切换到播放器 B"><span class="source-glyph" aria-hidden="true">A</span></button>
+                    <button class="control" data-command="previous" type="button" aria-label="上一首"><span class="transport previous" aria-hidden="true"></span></button>
+                    <button class="control play-toggle" data-command="toggle" type="button" aria-label="暂停"><span class="transport toggle" aria-hidden="true"></span></button>
+                    <button class="control" data-command="next" type="button" aria-label="下一首"><span class="transport next" aria-hidden="true"></span></button>
+                  </div>
+                </div>
+                <div class="notice">
+                  <span class="notice-icon" aria-hidden="true"></span>
+                  <span class="track-meta"><strong class="notice-title"></strong><span class="notice-copy"></span></span>
+                </div>
+              </div>
+            </div>
+            <div class="desktop-bar" aria-hidden="true">
+              <span class="windows-mark"></span><span class="desktop-search"></span><span class="desktop-app"></span>
+            </div>
+          </div>
+          <div class="demo-toolbar" aria-label="选择灵动岛状态">
+            <button type="button" data-mode="idle" aria-pressed="false">待机</button>
+            <button type="button" data-mode="compact" aria-pressed="true">音乐胶囊</button>
+            <button type="button" data-mode="expanded" aria-pressed="false">展开播放器</button>
+          </div>
+        </div>
+        <p class="demo-hint" id="demo-hint">点击主岛展开播放器，点击右侧圆岛切换软件。</p>
+        <p class="visually-hidden" id="demo-status" role="status"></p>
+        <noscript><p>开启 JavaScript 后可以操作演示。下方仍可查看功能与使用说明。</p></noscript>
+      </figure>
+    </section>
+
+    <section id="features" class="features wrap" aria-labelledby="features-title">
+      <h2 id="features-title">屏幕上沿，随手查看</h2>
+      <div class="feature-row">
+        <div class="feature-copy">
+          <h3>音乐在手边</h3>
+          <p>鼠标滑过待机胶囊就能看到歌名和封面。点击展开，查看进度、暂停或换歌。多个播放器接入 Windows 系统媒体控制时，右侧圆岛显示下一个来源，轻点就能切换。</p>
+          <a class="text-link" href="#demo" data-preview="expanded">体验播放器</a>
+        </div>
+        <div class="feature-demo sound-scene" aria-hidden="true">
+          <div class="sample-island"><span class="cover cover-violet"></span><span><strong>折叠的海</strong><small>午夜放映室</small></span></div>
+          <span class="sample-satellite"><span class="source-glyph">A</span></span>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-copy">
+          <h3>有变化，抬眼就看到</h3>
+          <p>调整音量、设备电量偏低或收到聊天通知时，WinHalo 可以显示短暂提示。聊天通知来自 Windows 通知中心，默认关闭，需要安装通知组件并授权。</p>
+          <div class="notice-links" aria-label="体验提示">
+            <a class="text-link" href="#demo" data-preview="volume">音量</a>
+            <a class="text-link" href="#demo" data-preview="battery">低电量</a>
+            <a class="text-link" href="#demo" data-preview="message">聊天消息</a>
+          </div>
+        </div>
+        <div class="feature-demo message-scene" aria-hidden="true">
+          <div class="sample-notice"><span class="sample-message">···</span><span><strong>新消息</strong><small>示例联系人 · 文件已发给你</small></span></div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-copy">
+          <h3>右击，打开设置</h3>
+          <p>调节胶囊尺寸、位置、显示器和动画速度。全屏时可以自动隐藏，支持桌面模糊的 Windows 11 设备还可开启玻璃效果。</p>
+        </div>
+        <div class="feature-demo settings-scene" aria-hidden="true">
+          <div class="mini-settings">
+            <div class="mini-sidebar"><strong>WinHalo</strong><span>外观</span><span>行为</span></div>
+            <div class="mini-options"><strong>外观</strong>
+              <span>胶囊大小 <b>－　1.00　＋</b></span>
+              <span>桌面模糊 <i></i></span>
+              <span>减少动态效果 <i></i></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="start" class="start" aria-labelledby="start-title">
+      <div class="wrap start-layout">
+        <div>
+          <h2 id="start-title">在 Windows 上使用 WinHalo</h2>
+          <p class="release-note">目前可从源码构建。可下载的安装包或便携包发布后，可在 GitHub Releases 获取。</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/realtreasures/WinHalo/releases">查看 GitHub Releases</a>
+            <a class="button secondary" href="https://github.com/realtreasures/WinHalo#运行">查看构建说明</a>
+          </div>
+        </div>
+        <ol class="quickstart">
+          <li>构建后运行 <code>WinHalo.exe</code>。</li>
+          <li>滑过屏幕顶部的待机胶囊。右击可打开设置。</li>
+          <li>在支持 Windows 系统媒体控制的播放器中播放音乐，再点击胶囊展开。</li>
+        </ol>
+        <div class="faq">
+          <details>
+            <summary>支持哪些 Windows 版本？</summary>
+            <p>项目面向 Windows 11 和 Windows 10 1809 及以上版本。Windows 10 的实机兼容性仍在验证，桌面模糊需要受支持的 Windows 11 环境。</p>
+          </details>
+          <details>
+            <summary>为什么胶囊没有显示音乐或聊天消息？</summary>
+            <p>音乐软件需要向 Windows 注册系统媒体会话。聊天功能需要安装通知组件、开启 WinHalo 的聊天消息开关并授予通知读取权限。QQ 已实测，微信仍待实机验证。<a href="https://github.com/realtreasures/WinHalo/blob/master/docs/CHAT_NOTIFICATIONS.md">查看通知接入说明</a></p>
+          </details>
+          <details>
+            <summary>有哪些快捷键？</summary>
+            <p><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Space</kbd> 展开或收起播放器。<br><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>I</kbd> 显示或隐藏灵动岛。<br><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Q</kbd> 退出 WinHalo。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer wrap">
+    <a class="brand" href="#main"><span class="brand-mark" aria-hidden="true"></span>WinHalo</a>
+    <nav aria-label="项目链接">
+      <a href="https://github.com/realtreasures/WinHalo">GitHub 源码</a>
+      <a href="https://github.com/realtreasures/WinHalo/issues">问题反馈</a>
+    </nav>
+  </footer>
+</body>
+</html>
