@@ -81,7 +81,7 @@ h1 span { display: block; }
 .demo-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem 1rem; padding: .72rem 1rem; font-size: .84rem; color: var(--muted); }
 .demo-caption span:first-child { font-weight: 650; color: var(--ink); display: inline-flex; align-items: center; gap: .5rem; }
 .caption-light { width: .63rem; height: .63rem; background: #75a9ee; border-radius: 50%; }
-.desktop { container-type: inline-size; position: relative; isolation: isolate; min-height: 18rem; aspect-ratio: 1.64; background: #bdd6f0 url("./wallpaper.webp") center 54% / cover no-repeat; }
+.desktop { container-type: inline-size; position: relative; isolation: isolate; width: 100%; min-height: 18rem; aspect-ratio: 1.64; background: #bdd6f0 url("./wallpaper.webp") center 54% / cover no-repeat; }
 .desktop-bar {
   display: flex; align-items: center; justify-content: center; gap: .65rem;
   position: absolute; inset: auto 0 0; height: 2rem;
@@ -93,9 +93,9 @@ h1 span { display: block; }
   --width: min(16rem, 66cqw);
   --height: 4.25rem;
   --radius: 2.125rem;
-  --offset: -2.35rem;
   --satellite-size: min(4.25rem, 16cqw);
   --satellite-gap: .5rem;
+  --offset: calc((var(--satellite-size) + var(--satellite-gap)) / -2);
   --duration: 295ms;
   position: absolute;
   inset: clamp(1.4rem, 9cqw, 3.8rem) 0 auto;
@@ -148,9 +148,9 @@ h1 span { display: block; }
     linear-gradient(150deg, #483c76, #b96679);
 }
 .island-content .satellite {
-  position: absolute; inset: 0 auto auto calc(100% + var(--satellite-gap));
+  position: absolute; inset: calc((var(--height) - var(--satellite-size)) / 2) auto auto calc(100% + var(--satellite-gap));
   display: grid; place-items: center;
-  width: var(--satellite-size); height: var(--height);
+  width: var(--satellite-size); height: var(--satellite-size);
   background: var(--island); border-radius: 50%; border: 1px solid #ffffff42;
   box-shadow: 0 .4rem 1rem #102b4d44;
   opacity: 0; visibility: hidden; transform: translateX(-1.7rem) scale(.65);
@@ -254,7 +254,7 @@ kbd { border: 1px solid #afbed1; background: #fff; border-radius: .25rem; paddin
   .feature-row { padding-block: 1.5rem; }
 }
 @container (max-width: 24rem) {
-  .island { --height: 3.75rem; --offset: calc(-1 * (var(--satellite-size) + var(--satellite-gap)) / 2); }
+  .island { --height: 3.75rem; }
   .island[data-state="expanded"] .player .cover { width: 2.6rem; }
   .compact-track .cover { width: 2.15rem; }
 }
